@@ -1,12 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../core/format.dart';
-import '../core/permissions.dart';
 import '../core/theme.dart';
 import '../models/models.dart';
-import '../providers/app_provider.dart';
 import '../widgets/product_image.dart';
 import '../widgets/shared_helpers.dart';
 import '../widgets/sheets.dart';

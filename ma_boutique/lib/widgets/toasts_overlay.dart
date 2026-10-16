@@ -79,7 +79,6 @@ class _ToastCarteState extends State<_ToastCarte> with SingleTickerProviderState
 
   @override
   Widget build(BuildContext context) {
-    final c = widget.couleurs;
     final (icon, bgColor, textColor) = switch (widget.toast.ton) {
       TonToast.succes => (
           Icons.check_circle_rounded,

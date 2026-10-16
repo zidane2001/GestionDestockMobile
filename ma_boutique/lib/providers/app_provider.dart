@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/format.dart';
@@ -40,6 +41,8 @@ class AppProvider extends ChangeNotifier {
   List<ToastMessage> _toasts = [];
 
   final List<Timer> _timers = [];
+  Timer? _envoiSyncDiffere;
+  StreamSubscription<List<ConnectivityResult>>? _abonnementConnectivite;
 
   // ---------- Getters ----------
 
@@ -78,7 +81,9 @@ class AppProvider extends ChangeNotifier {
   List<NotificationItem> get notificationsRole {
     final s = session;
     if (s == null) return [];
-    return _notifications.where((n) => n.destinataires.contains(s.role)).toList();
+    return _notifications
+        .where((n) => n.destinataires.contains(s.role))
+        .toList();
   }
 
   @override
@@ -86,6 +91,8 @@ class AppProvider extends ChangeNotifier {
     for (final t in _timers) {
       t.cancel();
     }
+    _envoiSyncDiffere?.cancel();
+    unawaited(_abonnementConnectivite?.cancel());
     unawaited(_sync?.liberer());
     super.dispose();
   }
@@ -113,22 +120,100 @@ class AppProvider extends ChangeNotifier {
         }
       }
     }
+    await _initialiserSuiviConnectivite();
     notifyListeners();
-    unawaited(_synchroniser());
-    unawaited(_activerTempsReel());
+    if (_enLigne) {
+      unawaited(_synchroniser());
+      unawaited(_activerTempsReel());
+    }
+  }
+
+  Future<void> _initialiserSuiviConnectivite() async {
+    try {
+      final connectivity = Connectivity();
+      final resultats = await connectivity.checkConnectivity();
+      _enLigne = _connexionDisponible(resultats);
+      await _abonnementConnectivite?.cancel();
+      _abonnementConnectivite = connectivity.onConnectivityChanged.listen(
+        _traiterChangementConnectivite,
+      );
+    } catch (_) {
+      // Les appels réseau restent protégés par SyncService. En cas de plugin
+      // indisponible (notamment dans certains tests), on conserve l'état actuel.
+    }
+  }
+
+  bool _connexionDisponible(List<ConnectivityResult> resultats) =>
+      resultats.any((resultat) => resultat != ConnectivityResult.none);
+
+  void _traiterChangementConnectivite(List<ConnectivityResult> resultats) {
+    final maintenantEnLigne = _connexionDisponible(resultats);
+    if (maintenantEnLigne == _enLigne) return;
+    _enLigne = maintenantEnLigne;
+    if (maintenantEnLigne) {
+      // L'évènement natif arrive dès que le transport revient. Un léger délai
+      // laisse au DNS et à la route réseau le temps de devenir utilisables.
+      _programmerEnvoiSync(delai: const Duration(milliseconds: 700));
+      unawaited(_activerTempsReel());
+    } else {
+      notifier(
+        'Mode hors ligne — les opérations seront synchronisées dès le retour du réseau.',
+        TonToast.info,
+      );
+      unawaited(_desactiverTempsReel());
+    }
+    notifyListeners();
   }
 
   Future<void> _chargerDonneesBoutique(String boutiqueId) async {
-    _employes = (await _db.toutes('employes', boutiqueId: boutiqueId)).map(Employe.fromMap).toList();
-    _produits = (await _db.toutes('produits', boutiqueId: boutiqueId)).map(Produit.fromMap).toList();
-    _ventes = (await _db.toutes('ventes', ordre: 'date DESC', boutiqueId: boutiqueId)).map(Vente.fromMap).toList();
-    _depenses = (await _db.toutes('depenses', ordre: 'date DESC', boutiqueId: boutiqueId)).map(Depense.fromMap).toList();
-    _retours = (await _db.toutes('retours', ordre: 'date DESC', boutiqueId: boutiqueId)).map(Retour.fromMap).toList();
-    _notifications =
-        (await _db.toutes('notifications', ordre: 'date DESC', boutiqueId: boutiqueId)).map(NotificationItem.fromMap).toList();
-    _pointages = (await _db.toutes('pointages', boutiqueId: boutiqueId)).map(Pointage.fromMap).toList();
-    _activites = (await _db.toutes('activites', ordre: 'date DESC', boutiqueId: boutiqueId)).map(Activite.fromMap).toList();
-    _appareils = (await _db.toutes('appareils', boutiqueId: boutiqueId)).map(Appareil.fromMap).toList();
+    final boutiques = await _db.toutes('boutiques');
+    for (final ligne in boutiques) {
+      if (ligne['id'] == boutiqueId) {
+        _boutique = Boutique.fromMap(ligne);
+        break;
+      }
+    }
+    _employes = (await _db.toutes(
+      'employes',
+      boutiqueId: boutiqueId,
+    )).map(Employe.fromMap).toList();
+    _produits = (await _db.toutes(
+      'produits',
+      boutiqueId: boutiqueId,
+    )).map(Produit.fromMap).toList();
+    _ventes = (await _db.toutes(
+      'ventes',
+      ordre: 'date DESC',
+      boutiqueId: boutiqueId,
+    )).map(Vente.fromMap).toList();
+    _depenses = (await _db.toutes(
+      'depenses',
+      ordre: 'date DESC',
+      boutiqueId: boutiqueId,
+    )).map(Depense.fromMap).toList();
+    _retours = (await _db.toutes(
+      'retours',
+      ordre: 'date DESC',
+      boutiqueId: boutiqueId,
+    )).map(Retour.fromMap).toList();
+    _notifications = (await _db.toutes(
+      'notifications',
+      ordre: 'date DESC',
+      boutiqueId: boutiqueId,
+    )).map(NotificationItem.fromMap).toList();
+    _pointages = (await _db.toutes(
+      'pointages',
+      boutiqueId: boutiqueId,
+    )).map(Pointage.fromMap).toList();
+    _activites = (await _db.toutes(
+      'activites',
+      ordre: 'date DESC',
+      boutiqueId: boutiqueId,
+    )).map(Activite.fromMap).toList();
+    _appareils = (await _db.toutes(
+      'appareils',
+      boutiqueId: boutiqueId,
+    )).map(Appareil.fromMap).toList();
   }
 
   Future<void> _persistTout() async {
@@ -261,9 +346,11 @@ class AppProvider extends ChangeNotifier {
     final id = _uid();
     _toasts = [..._toasts, ToastMessage(id: id, message: message, ton: ton)];
     notifyListeners();
-    _timers.add(Timer(const Duration(milliseconds: 3200), () {
-      fermerToast(id);
-    }));
+    _timers.add(
+      Timer(const Duration(milliseconds: 3200), () {
+        fermerToast(id);
+      }),
+    );
   }
 
   void fermerToast(String id) {
@@ -290,8 +377,12 @@ class AppProvider extends ChangeNotifier {
       ..._notifications,
     ];
     _persistNotifications();
-    _enregistrerSync('notifications', 'upsert', _notifications.first.id,
-        _notifications.first.toMap());
+    _enregistrerSync(
+      'notifications',
+      'upsert',
+      _notifications.first.id,
+      _notifications.first.toMap(),
+    );
   }
 
   void _journaliser(NotifType type, String description) {
@@ -309,7 +400,12 @@ class AppProvider extends ChangeNotifier {
       ..._activites,
     ];
     _persistActivites();
-    _enregistrerSync('activites', 'upsert', _activites.first.id, _activites.first.toMap());
+    _enregistrerSync(
+      'activites',
+      'upsert',
+      _activites.first.id,
+      _activites.first.toMap(),
+    );
   }
 
   void _majCaisse(double delta) {
@@ -325,11 +421,52 @@ class AppProvider extends ChangeNotifier {
   }
 
   /// Met une opération en file de synchronisation (persistée localement).
-  void _enregistrerSync(String table, String action, String rowId, Map<String, Object?> data) {
+  void _enregistrerSync(
+    String table,
+    String action,
+    String rowId,
+    Map<String, Object?> data,
+  ) {
     final boutiqueId = _boutique?.id;
     if (boutiqueId != null) {
-      _db.insererSyncQueue(table, action, rowId, data, boutiqueId: boutiqueId);
+      unawaited(
+        _mettreEnFileEtProgrammerSync(table, action, rowId, data, boutiqueId),
+      );
     }
+  }
+
+  Future<void> _mettreEnFileEtProgrammerSync(
+    String table,
+    String action,
+    String rowId,
+    Map<String, Object?> data,
+    String boutiqueId,
+  ) async {
+    await _db.insererSyncQueue(
+      table,
+      action,
+      rowId,
+      data,
+      boutiqueId: boutiqueId,
+    );
+    if (_boutique?.id != boutiqueId) return;
+    _enAttenteSync = (await _db.listeSyncQueue(boutiqueId: boutiqueId)).length;
+    notifyListeners();
+    if (_enLigne && (_sync?.configure ?? false)) {
+      _programmerEnvoiSync();
+    }
+  }
+
+  /// Regroupe les écritures liées à une même action métier, puis les pousse
+  /// presque immédiatement. La file SQLite reste la garantie hors ligne.
+  void _programmerEnvoiSync({
+    Duration delai = const Duration(milliseconds: 180),
+  }) {
+    _envoiSyncDiffere?.cancel();
+    _envoiSyncDiffere = Timer(delai, () {
+      _envoiSyncDiffere = null;
+      unawaited(_synchroniser(silencieux: true));
+    });
   }
 
   Future<void> _synchroniser({bool silencieux = false}) async {
@@ -337,14 +474,24 @@ class AppProvider extends ChangeNotifier {
     if (sync == null || !sync.configure) return;
     final boutiqueId = _boutique?.id;
     if (boutiqueId == null) return;
-    final resultat = await sync.synchroniser(this, boutiqueId, silencieux: silencieux);
+    if (sync.enCours) {
+      _programmerEnvoiSync(delai: const Duration(milliseconds: 500));
+      return;
+    }
+    final resultat = await sync.synchroniser(
+      this,
+      boutiqueId,
+      silencieux: silencieux,
+    );
     if (!resultat.ok) {
       if (!silencieux) {
         notifier('Synchronisation impossible pour le moment.', TonToast.erreur);
       }
       return;
     }
+    final attentePrecedente = _enAttenteSync;
     _enAttenteSync = resultat.enAttente;
+    if (attentePrecedente != _enAttenteSync) notifyListeners();
     if (silencieux) return;
     if (resultat.envoyees > 0) {
       notifier(
@@ -381,7 +528,9 @@ class AppProvider extends ChangeNotifier {
       sync.demarrerSurveillance(
         this,
         boutiqueId,
-        intervalle: actif ? const Duration(seconds: 45) : const Duration(seconds: 15),
+        intervalle: actif
+            ? const Duration(seconds: 45)
+            : const Duration(seconds: 15),
       );
     } catch (_) {
       // Pas de temps réel disponible : on reste en réconciliation périodique.
@@ -400,13 +549,21 @@ class AppProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Reçoit les changements d'état du canal (connexion, coupure, reprise).
+  void definirEtatTempsReel(bool actif) {
+    if (_tempsReelActif == actif) return;
+    _tempsReelActif = actif;
+    notifyListeners();
+  }
+
   /// Appelé quand une modification faite sur un autre appareil vient d'être
   /// appliquée localement : l'interface est prévenue sans être inondée.
   void signalerMajDistante(String table) {
     final maintenant = DateTime.now();
     _derniereMajDistante = maintenant;
     final derniere = _derniereNotificationDistante;
-    if (derniere == null || maintenant.difference(derniere) > const Duration(seconds: 4)) {
+    if (derniere == null ||
+        maintenant.difference(derniere) > const Duration(seconds: 4)) {
       _derniereNotificationDistante = maintenant;
       notifier(libelleMajDistante(table), TonToast.info);
     } else {
@@ -490,16 +647,23 @@ class AppProvider extends ChangeNotifier {
     _boutique = b.copyWith(logoUrl: logoUrl);
     _persistBoutique();
     _enregistrerSync('boutiques', 'upsert', _boutique!.id, _boutique!.toMap());
-    notifier(logoUrl != null ? 'Logo mis à jour' : 'Logo retiré',
-        logoUrl != null ? TonToast.succes : TonToast.info);
+    notifier(
+      logoUrl != null ? 'Logo mis à jour' : 'Logo retiré',
+      logoUrl != null ? TonToast.succes : TonToast.info,
+    );
   }
 
-  Future<String?> connexion(String nomBoutique, Role role, String motDePasse) async {
+  Future<String?> connexion(
+    String nomBoutique,
+    Role role,
+    String motDePasse,
+  ) async {
     // Find boutique by name
     final rowsBoutique = await _db.toutes('boutiques');
     Boutique? boutique;
     for (final row in rowsBoutique) {
-      if ((row['nom'] as String).toLowerCase() == nomBoutique.trim().toLowerCase()) {
+      if ((row['nom'] as String).toLowerCase() ==
+          nomBoutique.trim().toLowerCase()) {
         boutique = Boutique.fromMap(row);
         break;
       }
@@ -545,8 +709,12 @@ class AppProvider extends ChangeNotifier {
       soldeCaisse: (row['solde_caisse'] as num? ?? 0).toDouble(),
       statut: row['statut'] as String? ?? 'active',
       abonnementMode: row['abonnement_mode'] as String? ?? 'achat_direct',
-      abonnementDebut: row['abonnement_debut'] != null ? DateTime.tryParse(row['abonnement_debut'] as String) : null,
-      abonnementFin: row['abonnement_fin'] != null ? DateTime.tryParse(row['abonnement_fin'] as String) : null,
+      abonnementDebut: row['abonnement_debut'] != null
+          ? DateTime.tryParse(row['abonnement_debut'] as String)
+          : null,
+      abonnementFin: row['abonnement_fin'] != null
+          ? DateTime.tryParse(row['abonnement_fin'] as String)
+          : null,
       notificationAbonnement: row['notification_abonnement'] == true,
       methodePaiement: row['methode_paiement'] as String? ?? '',
     );
@@ -587,7 +755,12 @@ class AppProvider extends ChangeNotifier {
 
   List<Permission> _parsePermissions(String raw) {
     if (raw.isEmpty) return [];
-    return raw.split(',').map((p) => p.trim()).where((p) => p.isNotEmpty).map(PermissionX.fromName).toList();
+    return raw
+        .split(',')
+        .map((p) => p.trim())
+        .where((p) => p.isNotEmpty)
+        .map(PermissionX.fromName)
+        .toList();
   }
 
   void deconnexion() {
@@ -652,7 +825,11 @@ class AppProvider extends ChangeNotifier {
 
   // ---------- Opérations métier ----------
 
-  String? enregistrerVente(String produitId, double quantite, double prixUnitaire) {
+  String? enregistrerVente(
+    String produitId,
+    double quantite,
+    double prixUnitaire,
+  ) {
     final s = session;
     if (s == null) return 'Session expirée.';
     Produit? produit;
@@ -687,7 +864,10 @@ class AppProvider extends ChangeNotifier {
     _persistVentes();
     _produits = [
       for (final p in _produits)
-        if (p.id == produitId) p.copyWith(quantite: p.quantite - quantite) else p,
+        if (p.id == produitId)
+          p.copyWith(quantite: p.quantite - quantite)
+        else
+          p,
     ];
     _persistProduits();
     _majCaisse(total);
@@ -708,8 +888,10 @@ class AppProvider extends ChangeNotifier {
         [Role.patron, Role.manager, Role.caissiere],
       );
     }
-    _journaliser(NotifType.vente,
-        'Vente de ${quantite.toStringAsFixed(0)} × ${produit.nom} pour ${formatMontant(total, monnaie)}');
+    _journaliser(
+      NotifType.vente,
+      'Vente de ${quantite.toStringAsFixed(0)} × ${produit.nom} pour ${formatMontant(total, monnaie)}',
+    );
     _compterSync();
     notifier('Vente enregistrée · ${formatMontant(total, monnaie)}');
     return null;
@@ -726,15 +908,21 @@ class AppProvider extends ChangeNotifier {
       }
     }
     if (produit == null) return 'Produit introuvable.';
-    if (description.trim().isEmpty) return 'La description du problème est obligatoire.';
+    if (description.trim().isEmpty) {
+      return 'La description du problème est obligatoire.';
+    }
     if (produit.quantite < 1) return 'Aucune pièce en stock pour ce produit.';
     _produits = [
       for (final p in _produits)
         if (p.id == produitId) p.copyWith(quantite: p.quantite - 1) else p,
     ];
     _persistProduits();
-    _enregistrerSync('produits', 'upsert', produitId,
-        produit.copyWith(quantite: produit.quantite - 1).toMap());
+    _enregistrerSync(
+      'produits',
+      'upsert',
+      produitId,
+      produit.copyWith(quantite: produit.quantite - 1).toMap(),
+    );
     _retours = [
       Retour(
         id: _uid(),
@@ -750,7 +938,12 @@ class AppProvider extends ChangeNotifier {
       ..._retours,
     ];
     _persistRetours();
-    _enregistrerSync('retours', 'upsert', _retours.first.id, _retours.first.toMap());
+    _enregistrerSync(
+      'retours',
+      'upsert',
+      _retours.first.id,
+      _retours.first.toMap(),
+    );
     _pousserNotification(
       'Produit défectueux signalé',
       '${produit.nom} — $description',
@@ -792,8 +985,12 @@ class AppProvider extends ChangeNotifier {
         if (p.id == produitId) p.copyWith(quantite: p.quantite + 1) else p,
     ];
     _persistProduits();
-    _enregistrerSync('produits', 'upsert', produitId,
-        produit.copyWith(quantite: produit.quantite + 1).toMap());
+    _enregistrerSync(
+      'produits',
+      'upsert',
+      produitId,
+      produit.copyWith(quantite: produit.quantite + 1).toMap(),
+    );
     if (motif == MotifRetour.remboursement) _majCaisse(-montant);
     _retours = [
       Retour(
@@ -810,20 +1007,32 @@ class AppProvider extends ChangeNotifier {
       ..._retours,
     ];
     _persistRetours();
-    _enregistrerSync('retours', 'upsert', _retours.first.id, _retours.first.toMap());
+    _enregistrerSync(
+      'retours',
+      'upsert',
+      _retours.first.id,
+      _retours.first.toMap(),
+    );
     _pousserNotification(
       'Retour produit signalé',
       '${produit.nom} — ${motif == MotifRetour.remboursement ? 'remboursement' : 'échange'}',
       NotifType.retour,
       [Role.patron],
     );
-    _journaliser(NotifType.retour, 'Retour ${motif == MotifRetour.remboursement ? 'remboursement' : 'échange'} : ${produit.nom}');
+    _journaliser(
+      NotifType.retour,
+      'Retour ${motif == MotifRetour.remboursement ? 'remboursement' : 'échange'} : ${produit.nom}',
+    );
     _compterSync();
     notifier('Retour enregistré');
     return null;
   }
 
-  String? enregistrerDepense(String description, double montant, TypeDepense type) {
+  String? enregistrerDepense(
+    String description,
+    double montant,
+    TypeDepense type,
+  ) {
     final s = session;
     if (s == null) return 'Session expirée.';
     if (description.trim().isEmpty) return 'Le motif est obligatoire.';
@@ -845,19 +1054,33 @@ class AppProvider extends ChangeNotifier {
       ..._depenses,
     ];
     _persistDepenses();
-    _enregistrerSync('depenses', 'upsert', _depenses.first.id, _depenses.first.toMap());
+    _enregistrerSync(
+      'depenses',
+      'upsert',
+      _depenses.first.id,
+      _depenses.first.toMap(),
+    );
     _majCaisse(-montant);
     _pousserNotification(
-      type == TypeDepense.depense ? 'Dépense enregistrée' : 'Diminution de caisse justifiée',
+      type == TypeDepense.depense
+          ? 'Dépense enregistrée'
+          : 'Diminution de caisse justifiée',
       '$description — ${formatMontant(montant, monnaie)} par ${s.nom}',
       NotifType.depense,
       type == TypeDepense.depense
           ? [Role.patron, Role.manager, Role.caissiere]
           : [Role.patron, Role.manager],
     );
-    _journaliser(NotifType.depense, '$description — ${formatMontant(montant, monnaie)}');
+    _journaliser(
+      NotifType.depense,
+      '$description — ${formatMontant(montant, monnaie)}',
+    );
     _compterSync();
-    notifier(type == TypeDepense.depense ? 'Dépense enregistrée' : 'Sortie de caisse justifiée');
+    notifier(
+      type == TypeDepense.depense
+          ? 'Dépense enregistrée'
+          : 'Sortie de caisse justifiée',
+    );
     return null;
   }
 
@@ -896,12 +1119,16 @@ class AppProvider extends ChangeNotifier {
       NotifType.produit,
       [Role.patron, Role.manager, Role.caissiere],
     );
-    _journaliser(NotifType.produit, 'Produit ajouté : ${p.nom} (${quantite.toStringAsFixed(0)} pièces)');
+    _journaliser(
+      NotifType.produit,
+      'Produit ajouté : ${p.nom} (${quantite.toStringAsFixed(0)} pièces)',
+    );
     _compterSync();
     notifier('Produit ajouté au stock');
   }
 
-  void modifierProduit(String id, {
+  void modifierProduit(
+    String id, {
     required String nom,
     required double prixAchat,
     required double prixVente,
@@ -946,24 +1173,43 @@ class AppProvider extends ChangeNotifier {
       if (p.id == id) nom = p.nom;
     }
     _produits = [
-      for (final x in _produits) if (x.id == id) x.copyWith(actif: false) else x,
+      for (final x in _produits)
+        if (x.id == id) x.copyWith(actif: false) else x,
     ];
     _persistProduits();
     _enregistrerSync(
-        'produits', 'upsert', id, _produits.firstWhere((x) => x.id == id).toMap());
+      'produits',
+      'upsert',
+      id,
+      _produits.firstWhere((x) => x.id == id).toMap(),
+    );
     _journaliser(NotifType.produit, 'Produit supprimé : $nom');
-    notifier('Produit retiré du stock actif — historique conservé', TonToast.info);
+    notifier(
+      'Produit retiré du stock actif — historique conservé',
+      TonToast.info,
+    );
   }
 
   void traiterRetour(String id, StatutRetour statut) {
     _retours = [
-      for (final r in _retours) if (r.id == id) r.copyWith(statut: statut) else r,
+      for (final r in _retours)
+        if (r.id == id) r.copyWith(statut: statut) else r,
     ];
     _persistRetours();
-    _enregistrerSync('retours', 'upsert', id, _retours.firstWhere((r) => r.id == id).toMap());
-    _journaliser(NotifType.retour, 'Retour ${statut == StatutRetour.traite ? 'traité' : 'refusé'}');
+    _enregistrerSync(
+      'retours',
+      'upsert',
+      id,
+      _retours.firstWhere((r) => r.id == id).toMap(),
+    );
+    _journaliser(
+      NotifType.retour,
+      'Retour ${statut == StatutRetour.traite ? 'traité' : 'refusé'}',
+    );
     notifier(
-      statut == StatutRetour.traite ? 'Retour marqué comme traité' : 'Retour refusé',
+      statut == StatutRetour.traite
+          ? 'Retour marqué comme traité'
+          : 'Retour refusé',
       TonToast.info,
     );
   }
@@ -981,7 +1227,9 @@ class AppProvider extends ChangeNotifier {
       }
     }
     if (sens == 'arrivee') {
-      if (existant != null) return "Vous avez déjà pointé votre arrivée aujourd'hui.";
+      if (existant != null) {
+        return "Vous avez déjà pointé votre arrivée aujourd'hui.";
+      }
       _pointages = [
         Pointage(
           id: _uid(),
@@ -995,7 +1243,12 @@ class AppProvider extends ChangeNotifier {
         ..._pointages,
       ];
       _persistPointages();
-      _enregistrerSync('pointages', 'upsert', _pointages.first.id, _pointages.first.toMap());
+      _enregistrerSync(
+        'pointages',
+        'upsert',
+        _pointages.first.id,
+        _pointages.first.toMap(),
+      );
     } else {
       if (existant == null) return "Pointez d'abord votre arrivée.";
       if (existant.heureDepart != null) return 'Départ déjà pointé.';
@@ -1014,7 +1267,9 @@ class AppProvider extends ChangeNotifier {
       [Role.patron],
     );
     _journaliser(NotifType.pointage, 'Pointage $sens à $heureNow');
-    notifier('Pointage ${sens == 'arrivee' ? "d'arrivée" : 'de départ'} enregistré · $heureNow');
+    notifier(
+      'Pointage ${sens == 'arrivee' ? "d'arrivée" : 'de départ'} enregistré · $heureNow',
+    );
     return null;
   }
 
@@ -1026,7 +1281,9 @@ class AppProvider extends ChangeNotifier {
         if (n.destinataires.contains(s.role)) n.copyWith(estLu: true) else n,
     ];
     _persistNotifications();
-    for (final n in _notifications.where((n) => n.destinataires.contains(s.role))) {
+    for (final n in _notifications.where(
+      (n) => n.destinataires.contains(s.role),
+    )) {
       _enregistrerSync('notifications', 'upsert', n.id, n.toMap());
     }
     notifyListeners();
@@ -1034,12 +1291,19 @@ class AppProvider extends ChangeNotifier {
 
   // ---------- Comptes ----------
 
-  void creerEmploye(String nom, Role role, String motDePasse, List<Permission> permissions) {
+  void creerEmploye(
+    String nom,
+    Role role,
+    String motDePasse,
+    List<Permission> permissions,
+  ) {
     final employe = Employe(
       id: _uid(),
       nom: nom,
       role: role,
-      permissions: permissions.isNotEmpty ? permissions : permissionsParDefaut(role),
+      permissions: permissions.isNotEmpty
+          ? permissions
+          : permissionsParDefaut(role),
       motDePasse: motDePasse,
       statut: StatutEmploye.actif,
       pinActif: false,
@@ -1050,13 +1314,25 @@ class AppProvider extends ChangeNotifier {
     _employes = [..._employes, employe];
     _persistEmployes();
     _enregistrerSync('employes', 'upsert', employe.id, employe.toMap());
-    _pousserNotification('Compte créé', '$nom — ${role.label}', NotifType.compte, [Role.patron]);
-    _journaliser(NotifType.compte,
-        'Compte créé : $nom (${role.label}) avec ${employe.permissions.length} droits');
+    _pousserNotification(
+      'Compte créé',
+      '$nom — ${role.label}',
+      NotifType.compte,
+      [Role.patron],
+    );
+    _journaliser(
+      NotifType.compte,
+      'Compte créé : $nom (${role.label}) avec ${employe.permissions.length} droits',
+    );
     notifier('Compte employé créé');
   }
 
-  void modifierEmploye(String id, {required String nom, required Role role, required List<Permission> permissions}) {
+  void modifierEmploye(
+    String id, {
+    required String nom,
+    required Role role,
+    required List<Permission> permissions,
+  }) {
     _employes = [
       for (final e in _employes)
         if (e.id == id)
@@ -1065,7 +1341,12 @@ class AppProvider extends ChangeNotifier {
           e,
     ];
     _persistEmployes();
-    _enregistrerSync('employes', 'upsert', id, _employes.firstWhere((e) => e.id == id).toMap());
+    _enregistrerSync(
+      'employes',
+      'upsert',
+      id,
+      _employes.firstWhere((e) => e.id == id).toMap(),
+    );
     _journaliser(NotifType.compte, 'Droits mis à jour : $nom (${role.label})');
     notifier('Rôle et permissions enregistrés');
   }
@@ -1080,13 +1361,23 @@ class AppProvider extends ChangeNotifier {
     _employes = [
       for (final e in _employes)
         if (e.id == id)
-          e.copyWith(statut: suspendu ? StatutEmploye.suspendu : StatutEmploye.actif)
+          e.copyWith(
+            statut: suspendu ? StatutEmploye.suspendu : StatutEmploye.actif,
+          )
         else
           e,
     ];
     _persistEmployes();
-    _enregistrerSync('employes', 'upsert', id, _employes.firstWhere((e) => e.id == id).toMap());
-    _journaliser(NotifType.compte, 'Compte ${suspendu ? 'suspendu' : 'réactivé'} : ${cible.nom}');
+    _enregistrerSync(
+      'employes',
+      'upsert',
+      id,
+      _employes.firstWhere((e) => e.id == id).toMap(),
+    );
+    _journaliser(
+      NotifType.compte,
+      'Compte ${suspendu ? 'suspendu' : 'réactivé'} : ${cible.nom}',
+    );
     notifier(suspendu ? 'Compte suspendu' : 'Compte réactivé', TonToast.info);
   }
 
@@ -1107,7 +1398,7 @@ class AppProvider extends ChangeNotifier {
     notifier('Compte supprimé', TonToast.info);
   }
 
-Future<void> supprimerBoutique() async {
+  Future<void> supprimerBoutique() async {
     final patron = session;
     if (patron == null) return;
 
@@ -1116,8 +1407,15 @@ Future<void> supprimerBoutique() async {
 
     // Suppression locale SQLite - supprimer toutes les tables liées
     final tables = [
-      'employes', 'produits', 'ventes', 'dépenses', 'pointages',
-      'retours', 'notifications', 'activités', 'appareils'
+      'employes',
+      'produits',
+      'ventes',
+      'dépenses',
+      'pointages',
+      'retours',
+      'notifications',
+      'activités',
+      'appareils',
     ];
     for (final table in tables) {
       await _db.supprimer(table, '', boutiqueId: _boutique!.id);
@@ -1133,13 +1431,19 @@ Future<void> supprimerBoutique() async {
     _enregistrerSync('employes', 'upsert', '', {});
     _journaliser(NotifType.compte, 'Boutique supprimée');
   }
+
   void reinitialiserMotDePasse(String id, String motDePasse) {
     _employes = [
       for (final e in _employes)
         if (e.id == id) e.copyWith(motDePasse: motDePasse) else e,
     ];
     _persistEmployes();
-    _enregistrerSync('employes', 'upsert', id, _employes.firstWhere((e) => e.id == id).toMap());
+    _enregistrerSync(
+      'employes',
+      'upsert',
+      id,
+      _employes.firstWhere((e) => e.id == id).toMap(),
+    );
     notifier('Mot de passe réinitialisé');
   }
 
@@ -1148,12 +1452,15 @@ Future<void> supprimerBoutique() async {
     if (s == null) return;
     final maj = s.copyWith(pinActif: pin != null, pin: pin ?? s.pin);
     _employes = [
-      for (final e in _employes) if (e.id == s.id) maj else e,
+      for (final e in _employes)
+        if (e.id == s.id) maj else e,
     ];
     _persistEmployes();
     _enregistrerSync('employes', 'upsert', s.id, maj.toMap());
-    notifier(pin != null ? 'Code PIN enregistré' : 'Code PIN désactivé',
-        pin != null ? TonToast.succes : TonToast.info);
+    notifier(
+      pin != null ? 'Code PIN enregistré' : 'Code PIN désactivé',
+      pin != null ? TonToast.succes : TonToast.info,
+    );
   }
 
   Future<bool> verifierBiometrie() async {
@@ -1185,7 +1492,10 @@ Future<void> supprimerBoutique() async {
       }
       final types = await BiometricService.instance.availableBiometrics;
       if (types.isEmpty) {
-        notifier('Aucune biométrie configurée dans les paramètres du téléphone', TonToast.erreur);
+        notifier(
+          'Aucune biométrie configurée dans les paramètres du téléphone',
+          TonToast.erreur,
+        );
         return;
       }
       final test = await BiometricService.instance.authenticate(
@@ -1200,11 +1510,15 @@ Future<void> supprimerBoutique() async {
 
     final maj = s.copyWith(biometrie: !s.biometrie);
     _employes = [
-      for (final e in _employes) if (e.id == s.id) maj else e,
+      for (final e in _employes)
+        if (e.id == s.id) maj else e,
     ];
     _persistEmployes();
     _enregistrerSync('employes', 'upsert', s.id, maj.toMap());
-    notifier(maj.biometrie ? 'Biométrie activée' : 'Biométrie désactivée', TonToast.info);
+    notifier(
+      maj.biometrie ? 'Biométrie activée' : 'Biométrie désactivée',
+      TonToast.info,
+    );
   }
 
   void revoquerAppareil(String id) {
@@ -1214,12 +1528,23 @@ Future<void> supprimerBoutique() async {
     }
     if (cible == null) return;
     _appareils = [
-      for (final a in _appareils) if (a.id == id) a.copyWith(actif: !a.actif) else a,
+      for (final a in _appareils)
+        if (a.id == id) a.copyWith(actif: !a.actif) else a,
     ];
     _persistAppareils();
-    _enregistrerSync('appareils', 'upsert', id, _appareils.firstWhere((a) => a.id == id).toMap());
-    _journaliser(NotifType.compte,
-        'Appareil ${cible.actif ? 'révoqué' : 'autorisé'} : ${cible.nomAppareil}');
-    notifier(cible.actif ? 'Appareil révoqué et déconnecté' : 'Appareil autorisé', TonToast.info);
+    _enregistrerSync(
+      'appareils',
+      'upsert',
+      id,
+      _appareils.firstWhere((a) => a.id == id).toMap(),
+    );
+    _journaliser(
+      NotifType.compte,
+      'Appareil ${cible.actif ? 'révoqué' : 'autorisé'} : ${cible.nomAppareil}',
+    );
+    notifier(
+      cible.actif ? 'Appareil révoqué et déconnecté' : 'Appareil autorisé',
+      TonToast.info,
+    );
   }
 }

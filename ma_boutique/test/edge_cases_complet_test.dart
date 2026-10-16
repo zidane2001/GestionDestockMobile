@@ -8,7 +8,7 @@ import 'package:ma_boutique/services/sync_service.dart';
 void main() {
   group('Edge Cases - Models', () {
     group('Boutique', () {
-      Boutique _b({DateTime? abonnementFin}) => Boutique(
+      Boutique boutiqueTest({DateTime? abonnementFin}) => Boutique(
         id: '', nom: '', styleCommerce: '', emailPatron: '',
         monnaie: Monnaie.fcfa, soldeCaisse: 0, abonnementFin: abonnementFin,
       );
@@ -44,15 +44,15 @@ void main() {
         expect(restored.notificationAbonnement, isTrue);
       });
 
-      test('abonnementFin null → pas expiré', () => expect(_b().abonnementExpire, isFalse));
+      test('abonnementFin null → pas expiré', () => expect(boutiqueTest().abonnementExpire, isFalse));
 
       test('abonnementFin très loin dans le futur → pas proche', () {
-        final b = _b(abonnementFin: DateTime.now().add(const Duration(days: 365)));
+        final b = boutiqueTest(abonnementFin: DateTime.now().add(const Duration(days: 365)));
         expect(b.abonnementProche, isFalse);
       });
 
       test('abonnementFin = maintenant → proche', () {
-        final b = _b(abonnementFin: DateTime.now());
+        final b = boutiqueTest(abonnementFin: DateTime.now());
         expect(b.abonnementProche, isTrue);
       });
 

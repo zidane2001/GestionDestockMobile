@@ -215,13 +215,13 @@ class _ConnexionScreenState extends State<ConnexionScreen> {
                         try {
                           await Supabase.instance.client.auth.resetPasswordForEmail(email);
                           if (ctx.mounted) {
-                            Navigator.pop(ctx);
-                            ScaffoldMessenger.of(context).showSnackBar(
+                            ScaffoldMessenger.of(ctx).showSnackBar(
                               SnackBar(
                                 content: Text('Lien de réinitialisation envoyé à $email'),
                                 backgroundColor: c.success,
                               ),
                             );
+                            Navigator.pop(ctx);
                           }
                         } catch (e) {
                           setSheetState(() {
@@ -245,6 +245,7 @@ class _ConnexionScreenState extends State<ConnexionScreen> {
     );
   }
 
+  // ignore: unused_element
   void _ouvrirSuperadmin() {
     final c = context.colors;
     final nomCtrl = TextEditingController();

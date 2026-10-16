@@ -1,6 +1,4 @@
 import 'package:flutter/material.dart';
-import 'dart:io';
-import 'package:flutter/foundation.dart';
 
 /// Professional welcome screen background using the hero image
 class HeroGradient extends StatelessWidget {
@@ -19,7 +17,7 @@ class HeroGradient extends StatelessWidget {
           Image.asset(
             'assets/images/hero_boutique.jpg',
             fit: BoxFit.cover,
-            errorBuilder: (_, __, ___) => Container(color: const Color(0xFF0A0A0F)),
+            errorBuilder: (_, _, _) => Container(color: const Color(0xFF0A0A0F)),
           ),
           // Dark overlay for text readability
           Container(
@@ -141,7 +139,7 @@ class _AnimatedAppLogoState extends State<AnimatedAppLogo>
           child: Image.asset(
             'assets/images/logo_smart_stock.png',
             fit: BoxFit.contain,
-            errorBuilder: (_, __, ___) => Container(
+            errorBuilder: (_, _, _) => Container(
               color: const Color(0xFF1A1A2E),
               child: const Icon(Icons.storefront_rounded, size: 40, color: Colors.white54),
             ),

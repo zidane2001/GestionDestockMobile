@@ -1,0 +1,4 @@
+PASS — préflight Supabase lecture seule
+Résultat : les 10 tables synchronisées répondent HTTP 200 avec la clé publique ; mailer_autoconfirm=true.
+Limite : cette lecture ne prouve pas la publication Realtime ni le parcours multi-appareil.
+Exécuté le 2026-10-16.

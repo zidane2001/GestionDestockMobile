@@ -87,7 +87,30 @@ void main() {
       expect(decision.type, decisionIgnorer);
     });
 
-    test('supprime sur un DELETE même sans boutique_id (replica identity)', () {
+    test('supprime une ligne de la boutique courante', () {
+      final decision = interpreterChangement(
+        table: 'ventes',
+        boutiqueId: 'b1',
+        evenement: 'DELETE',
+        nouveau: const {},
+        ancien: {'id': 'v1', 'boutique_id': 'b1'},
+      );
+      expect(decision.type, decisionSupprimer);
+      expect(decision.id, 'v1');
+    });
+
+    test('ignore le DELETE d\'une autre boutique', () {
+      final decision = interpreterChangement(
+        table: 'ventes',
+        boutiqueId: 'b1',
+        evenement: 'DELETE',
+        nouveau: const {},
+        ancien: {'id': 'v1', 'boutique_id': 'b2'},
+      );
+      expect(decision.type, decisionIgnorer);
+    });
+
+    test('ignore un DELETE sans tenant au lieu de supprimer à l\'aveugle', () {
       final decision = interpreterChangement(
         table: 'ventes',
         boutiqueId: 'b1',
@@ -95,8 +118,7 @@ void main() {
         nouveau: const {},
         ancien: {'id': 'v1'},
       );
-      expect(decision.type, decisionSupprimer);
-      expect(decision.id, 'v1');
+      expect(decision.type, decisionIgnorer);
     });
 
     test('ignore un événement sans identifiant', () {
@@ -115,33 +137,51 @@ void main() {
     test('reconnaît l\'écho de sa propre écriture', () {
       final journal = JournalEcritures();
       journal.noter('produits', 'p1', '2026-10-16T10:00:00.000Z');
-      expect(journal.distantPlusRecent('produits', 'p1', '2026-10-16T10:00:00.000Z'), isFalse);
-      expect(journal.distantPlusRecent('produits', 'p1', '2026-10-16T09:00:00.000Z'), isFalse);
+      expect(
+        journal.distantPlusRecent('produits', 'p1', '2026-10-16T10:00:00.000Z'),
+        isFalse,
+      );
+      expect(
+        journal.distantPlusRecent('produits', 'p1', '2026-10-16T09:00:00.000Z'),
+        isFalse,
+      );
     });
 
     test('accepte une modification plus récente d\'un autre appareil', () {
       final journal = JournalEcritures();
       journal.noter('produits', 'p1', '2026-10-16T10:00:00.000Z');
-      expect(journal.distantPlusRecent('produits', 'p1', '2026-10-16T10:05:00.000Z'), isTrue);
+      expect(
+        journal.distantPlusRecent('produits', 'p1', '2026-10-16T10:05:00.000Z'),
+        isTrue,
+      );
     });
 
     test('accepte toute ligne jamais écrite localement', () {
       final journal = JournalEcritures();
-      expect(journal.distantPlusRecent('ventes', 'v1', '2026-10-16T10:00:00.000Z'), isTrue);
+      expect(
+        journal.distantPlusRecent('ventes', 'v1', '2026-10-16T10:00:00.000Z'),
+        isTrue,
+      );
     });
 
     test('purge les entrées anciennes', () {
       final journal = JournalEcritures();
       journal.noter('produits', 'p1', '2020-01-01T00:00:00.000Z');
       journal.purger();
-      expect(journal.distantPlusRecent('produits', 'p1', '2026-01-01T00:00:00.000Z'), isTrue);
+      expect(
+        journal.distantPlusRecent('produits', 'p1', '2026-01-01T00:00:00.000Z'),
+        isTrue,
+      );
     });
 
     test('se vide complètement', () {
       final journal = JournalEcritures();
       journal.noter('produits', 'p1', '2026-10-16T10:00:00.000Z');
       journal.vider();
-      expect(journal.distantPlusRecent('produits', 'p1', '2026-10-16T09:59:00.000Z'), isTrue);
+      expect(
+        journal.distantPlusRecent('produits', 'p1', '2026-10-16T09:59:00.000Z'),
+        isTrue,
+      );
     });
   });
 

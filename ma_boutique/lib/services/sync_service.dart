@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -229,7 +230,11 @@ class SyncResultat {
 }
 
 /// Décision à prendre face à un événement temps réel.
-typedef DecisionChangement = ({String type, String id, Map<String, Object?>? ligne});
+typedef DecisionChangement = ({
+  String type,
+  String id,
+  Map<String, Object?>? ligne,
+});
 
 const String decisionIgnorer = 'ignorer';
 const String decisionEcrire = 'ecrire';
@@ -250,9 +255,17 @@ DecisionChangement interpreterChangement({
     return (type: decisionIgnorer, id: '', ligne: null);
   }
   if (evenement == 'DELETE') {
+    final portee = table == 'boutiques'
+        ? ancien['id']?.toString()
+        : ancien['boutique_id']?.toString();
+    if (portee != boutiqueId) {
+      return (type: decisionIgnorer, id: id, ligne: null);
+    }
     return (type: decisionSupprimer, id: id, ligne: null);
   }
-  final portee = table == 'boutiques' ? nouveau['id']?.toString() : nouveau['boutique_id']?.toString();
+  final portee = table == 'boutiques'
+      ? nouveau['id']?.toString()
+      : nouveau['boutique_id']?.toString();
   if (portee != null && portee != boutiqueId) {
     return (type: decisionIgnorer, id: id, ligne: null);
   }
@@ -266,7 +279,8 @@ DecisionChangement interpreterChangement({
 /// Vrai si le serveur ne contient encore aucune donnée métier pour la
 /// boutique : il faut alors y envoyer le catalogue local (amorçage).
 @visibleForTesting
-bool serveurSansDonneesMetier(int lignesDistantesMetier) => lignesDistantesMetier == 0;
+bool serveurSansDonneesMetier(int lignesDistantesMetier) =>
+    lignesDistantesMetier == 0;
 
 /// Lignes locales à envoyer pour amorcer le serveur.
 @visibleForTesting
@@ -302,7 +316,10 @@ class SyncService {
   RealtimeChannel? _canal;
   String? _canalBoutiqueId;
   String? _sessionBoutiqueId;
+  bool _tempsReelConnecte = false;
   Timer? _minuteurReconcile;
+  Timer? _minuteurCompte;
+  bool _compteEnCours = false;
   Timer? _rafraichissement;
 
   final JournalEcritures journal = JournalEcritures();
@@ -315,7 +332,7 @@ class SyncService {
   bool get configure => supabaseConfigure;
 
   /// Vrai quand l'écoute temps réel est établie.
-  bool get tempsReelActif => _canal != null;
+  bool get tempsReelActif => _canal != null && _tempsReelConnecte;
 
   /// Vrai quand la réconciliation périodique est programmée.
   bool get surveillanceActive => _minuteurReconcile != null;
@@ -323,10 +340,12 @@ class SyncService {
   Future<SupabaseClient?> _client(String boutiqueId, String nomBoutique) async {
     if (!configure) return null;
     final client = Supabase.instance.client;
-    if (_sessionBoutiqueId == boutiqueId && client.auth.currentSession != null) {
+    if (_sessionBoutiqueId == boutiqueId &&
+        client.auth.currentSession != null) {
       return client;
     }
-    final email = 'boutique-${boutiqueId.replaceAll(RegExp(r'[^a-z0-9]'), '')}@ma-boutique.app';
+    final email =
+        'boutique-${boutiqueId.replaceAll(RegExp(r'[^a-z0-9]'), '')}@ma-boutique.app';
     final mdpDerive = 'mb-${boutiqueId.replaceAll(RegExp(r'[^a-z0-9]'), '')}';
     var mdp = await _db.getSetting('serveur_mdp');
     if (mdp == null || mdp.isEmpty) {
@@ -357,10 +376,10 @@ class SyncService {
       }
     }
     try {
-      await client.rpc('initier_boutique', params: {
-        'p_id': boutiqueId,
-        'p_nom': nomBoutique,
-      });
+      await client.rpc(
+        'initier_boutique',
+        params: {'p_id': boutiqueId, 'p_nom': nomBoutique},
+      );
     } catch (_) {
       // Déjà initialisée : rien à faire.
     }
@@ -372,10 +391,13 @@ class SyncService {
 
   /// Écoute les modifications de la boutique : chaque changement fait sur un
   /// autre appareil est écrit localement dès réception.
-  Future<bool> demarrerTempsReel(AppProvider provider, String boutiqueId) async {
+  Future<bool> demarrerTempsReel(
+    AppProvider provider,
+    String boutiqueId,
+  ) async {
     if (!configure || !provider.enLigne) return false;
     if (_canal != null) {
-      if (_canalBoutiqueId == boutiqueId) return true;
+      if (_canalBoutiqueId == boutiqueId && _tempsReelConnecte) return true;
       await arreterTempsReel();
     }
     try {
@@ -396,23 +418,49 @@ class SyncService {
             _appliquerEvenement(provider, boutiqueId, table, payload),
           ),
         );
-        if (table != 'boutiques') {
-          // Filet de sécurité : une suppression distante revient même quand la
-          // réplication n'expose pas `boutique_id` (replica identity par défaut).
-          canal.onPostgresChanges(
-            event: PostgresChangeEvent.delete,
-            schema: 'public',
-            table: table,
-            callback: (payload) => unawaited(
-              _appliquerEvenement(provider, boutiqueId, table, payload),
-            ),
-          );
-        }
       }
-      canal.subscribe();
       _canal = canal;
       _canalBoutiqueId = boutiqueId;
-      return true;
+      _tempsReelConnecte = false;
+
+      final confirmation = Completer<bool>();
+      canal.subscribe((statut, _) {
+        if (!identical(_canal, canal)) return;
+        final connecte = statut == RealtimeSubscribeStatus.subscribed;
+        _tempsReelConnecte = connecte;
+        provider.definirEtatTempsReel(connecte);
+
+        if (connecte) {
+          demarrerSurveillance(
+            provider,
+            boutiqueId,
+            intervalle: const Duration(seconds: 45),
+          );
+          if (!confirmation.isCompleted) confirmation.complete(true);
+          return;
+        }
+
+        demarrerSurveillance(
+          provider,
+          boutiqueId,
+          intervalle: const Duration(seconds: 15),
+        );
+        if (!confirmation.isCompleted &&
+            (statut == RealtimeSubscribeStatus.channelError ||
+                statut == RealtimeSubscribeStatus.timedOut ||
+                statut == RealtimeSubscribeStatus.closed)) {
+          confirmation.complete(false);
+        }
+      });
+
+      final connecte = await confirmation.future.timeout(
+        const Duration(seconds: 12),
+        onTimeout: () => false,
+      );
+      if (!connecte && identical(_canal, canal)) {
+        await arreterTempsReel();
+      }
+      return connecte;
     } catch (_) {
       // Serveur injoignable ou non configuré : la réconciliation périodique
       // de secours prend le relais, l'application reste utilisable hors ligne.
@@ -424,6 +472,7 @@ class SyncService {
     final canal = _canal;
     _canal = null;
     _canalBoutiqueId = null;
+    _tempsReelConnecte = false;
     if (canal == null) return;
     try {
       await Supabase.instance.client.removeChannel(canal);
@@ -445,11 +494,59 @@ class SyncService {
       intervalle,
       (_) => unawaited(synchroniser(provider, boutiqueId, silencieux: true)),
     );
+    // Certaines installations Supabase historiques n'ont pas encore publié
+    // `boutiques` dans Realtime. Ce contrôle léger garantit que le nom, le
+    // logo et les réglages du compte arrivent tout de même en quelques secondes
+    // sans relire les dix tables métier.
+    _minuteurCompte = Timer.periodic(
+      const Duration(seconds: 4),
+      (_) => unawaited(_reconcilierCompte(provider, boutiqueId)),
+    );
   }
 
   void arreterSurveillance() {
     _minuteurReconcile?.cancel();
     _minuteurReconcile = null;
+    _minuteurCompte?.cancel();
+    _minuteurCompte = null;
+  }
+
+  Future<void> _reconcilierCompte(
+    AppProvider provider,
+    String boutiqueId,
+  ) async {
+    if (_compteEnCours || !provider.enLigne) return;
+    _compteEnCours = true;
+    try {
+      final client = await _client(boutiqueId, provider.boutique?.nom ?? '');
+      if (client == null) return;
+      final distante = await client
+          .from('boutiques')
+          .select()
+          .eq('id', boutiqueId)
+          .maybeSingle();
+      if (distante == null) return;
+      final ligneDistante = versLocal(
+        'boutiques',
+        Map<String, Object?>.from(distante),
+      );
+      final locales = await _db.toutes('boutiques');
+      Map<String, Object?>? ligneLocale;
+      for (final ligne in locales) {
+        if (ligne['id'] == boutiqueId) {
+          ligneLocale = ligne;
+          break;
+        }
+      }
+      if (ligneLocale != null && mapEquals(ligneLocale, ligneDistante)) return;
+      await _db.inserer('boutiques', ligneDistante);
+      await provider.chargerDepuisBase();
+      provider.signalerMajDistante('boutiques');
+    } catch (_) {
+      // Le prochain tick ou le canal Realtime reprendra automatiquement.
+    } finally {
+      _compteEnCours = false;
+    }
   }
 
   Future<void> liberer() async {
@@ -505,18 +602,27 @@ class SyncService {
       final localesTable = table == 'boutiques'
           ? const <Map<String, Object?>>[]
           : await _db.toutes(table, boutiqueId: boutiqueId);
-      final lignes =
-          lignesAAmorcer(table, boutiqueId, localesBoutiques, localesTable);
+      final lignes = lignesAAmorcer(
+        table,
+        boutiqueId,
+        localesBoutiques,
+        localesTable,
+      );
       for (final ligne in lignes) {
         final id = ligne['id']?.toString();
         if (id == null) continue;
         try {
           final renvoye = await client
               .from(table)
-              .upsert(versSupabase(table, ligne, boutiqueId),
-                  onConflict: 'id', ignoreDuplicates: false)
+              .upsert(
+                versSupabase(table, ligne, boutiqueId),
+                onConflict: 'id',
+                ignoreDuplicates: false,
+              )
               .select('id, maj_ts');
-          final maj = renvoye.isNotEmpty ? renvoye.first['maj_ts']?.toString() : null;
+          final maj = renvoye.isNotEmpty
+              ? renvoye.first['maj_ts']?.toString()
+              : null;
           journal.noter(table, id, maj);
           envoyees++;
         } catch (_) {
@@ -568,7 +674,8 @@ class SyncService {
           if (action == 'delete') {
             await client.from(table).delete().eq('id', rowId);
           } else {
-            final data = jsonDecode(op['data'] as String) as Map<String, Object?>;
+            final data =
+                jsonDecode(op['data'] as String) as Map<String, Object?>;
             final ligne = versSupabase(table, data, boutiqueId);
             // La ligne renvoyée porte l'horodatage réellement stocké : elle
             // permet de reconnaître l'écho de nos propres écritures.
@@ -581,7 +688,10 @@ class SyncService {
                 : ligne['maj_ts']?.toString();
             journal.noter(table, rowId, majServeur);
           }
-          await _db.supprimerSyncQueue(op['id'] as String, boutiqueId: boutiqueId);
+          await _db.supprimerSyncQueue(
+            op['id'] as String,
+            boutiqueId: boutiqueId,
+          );
           poussees++;
         } catch (_) {
           // L'opération reste en file et sera retentée à la prochaine sync.
@@ -631,7 +741,11 @@ class SyncService {
 }
 
 @visibleForTesting
-Map<String, Object?> versSupabase(String table, Map<String, Object?> locale, String boutiqueId) {
+Map<String, Object?> versSupabase(
+  String table,
+  Map<String, Object?> locale,
+  String boutiqueId,
+) {
   final colonnes = _colonnes[table]!;
   final booleens = _booleens[table] ?? const <String>[];
   final out = <String, Object?>{
@@ -658,7 +772,9 @@ Map<String, Object?> versLocal(String table, Map<String, Object?> supabase) {
   supabase.forEach((cle, valeur) {
     final locale = inverses[cle];
     if (locale == null) return;
-    out[locale] = booleens.contains(locale) && valeur is bool ? (valeur ? 1 : 0) : valeur;
+    out[locale] = booleens.contains(locale) && valeur is bool
+        ? (valeur ? 1 : 0)
+        : valeur;
   });
   return out;
 }

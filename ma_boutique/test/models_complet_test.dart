@@ -69,7 +69,7 @@ void main() {
   });
 
   group('Boutique', () {
-    Boutique _b({
+    Boutique boutiqueTest({
       String statut = 'active',
       String abonnementMode = 'mensuel',
       DateTime? abonnementDebut,
@@ -85,29 +85,29 @@ void main() {
       );
     }
 
-    test('estDesactivee quand statut desactivee', () => expect(_b(statut: 'desactivee').estDesactivee, isTrue));
-    test('estDesactivee false quand active', () => expect(_b(statut: 'active').estDesactivee, isFalse));
+    test('estDesactivee quand statut desactivee', () => expect(boutiqueTest(statut: 'desactivee').estDesactivee, isTrue));
+    test('estDesactivee false quand active', () => expect(boutiqueTest(statut: 'active').estDesactivee, isFalse));
 
     test('abonnementExpire vrai si date fin < now', () {
-      final b = _b(abonnementFin: DateTime.now().subtract(const Duration(days: 1)));
+      final b = boutiqueTest(abonnementFin: DateTime.now().subtract(const Duration(days: 1)));
       expect(b.abonnementExpire, isTrue);
     });
     test('abonnementExpire faux si date fin > now', () {
-      final b = _b(abonnementFin: DateTime.now().add(const Duration(days: 10)));
+      final b = boutiqueTest(abonnementFin: DateTime.now().add(const Duration(days: 10)));
       expect(b.abonnementExpire, isFalse);
     });
     test('abonnementProche vrai si < 7 jours et pas expiré', () {
-      final b = _b(abonnementFin: DateTime.now().add(const Duration(days: 3)));
+      final b = boutiqueTest(abonnementFin: DateTime.now().add(const Duration(days: 3)));
       expect(b.abonnementProche, isTrue);
     });
     test('abonnementProche faux si > 7 jours', () {
-      final b = _b(abonnementFin: DateTime.now().add(const Duration(days: 30)));
+      final b = boutiqueTest(abonnementFin: DateTime.now().add(const Duration(days: 30)));
       expect(b.abonnementProche, isFalse);
     });
-    test('abonnementLabel retourne le label du mode', () => expect(_b(abonnementMode: 'mensuel').abonnementLabel, isNotEmpty));
+    test('abonnementLabel retourne le label du mode', () => expect(boutiqueTest(abonnementMode: 'mensuel').abonnementLabel, isNotEmpty));
 
     test('toMap/fromMap roundtrip', () {
-      final original = _b();
+      final original = boutiqueTest();
       final map = original.toMap();
       final restored = Boutique.fromMap(map);
       expect(restored.id, original.id);
@@ -117,7 +117,7 @@ void main() {
     });
 
     test('copyWith ne perd pas les champs', () {
-      final original = _b();
+      final original = boutiqueTest();
       final copied = original.copyWith(soldeCaisse: 75000);
       expect(copied.soldeCaisse, 75000);
       expect(copied.monnaie, original.monnaie);

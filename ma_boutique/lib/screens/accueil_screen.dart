@@ -57,7 +57,7 @@ class _AccueilScreenState extends State<AccueilScreen>
             child: Image.asset(
               'assets/images/hero_boutique.jpg',
               fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) => Container(
+              errorBuilder: (_, _, _) => Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
@@ -104,7 +104,7 @@ class _AccueilScreenState extends State<AccueilScreen>
                             width: 180,
                             height: 180,
                             fit: BoxFit.contain,
-                            errorBuilder: (_, __, ___) => const Icon(
+                            errorBuilder: (_, _, _) => const Icon(
                               Icons.storefront_rounded,
                               size: 180,
                               color: Colors.white,

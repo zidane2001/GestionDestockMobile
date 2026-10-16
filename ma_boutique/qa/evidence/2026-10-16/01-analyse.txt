@@ -1,0 +1,3 @@
+PASS — flutter analyze --no-pub
+Résultat : No issues found.
+Exécuté le 2026-10-16.

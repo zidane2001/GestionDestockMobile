@@ -1,0 +1,56 @@
+/* @import url() FONT IMPORTS MUST ALWAYS BE AT THE VERY TOP OF THIS FILE, ABOVE THE TAILWIND IMPORTS — DO NOT DELETE THIS COMMENT */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+/* CRITICAL: THE FOLLOWING TAILWIND IMPORTS MUST NEVER BE DELETED OR REORDERED — DO NOT DELETE THIS COMMENT */
+@import 'tailwindcss/base';
+@import 'tailwindcss/components';
+@import 'tailwindcss/utilities';
+
+/* END TAILWIND IMPORTS — ALL OTHER CSS MUST GO BELOW THIS LINE */
+
+:root {
+  --canvas: 244 246 248;
+  --surface: 255 255 255;
+  --surface-2: 238 241 245;
+  --line: 223 229 236;
+  --ink: 14 22 33;
+  --muted: 104 118 136;
+  --primary: 13 110 100;
+  --primary-soft: 224 242 239;
+  --on-primary: 255 255 255;
+  --accent: 194 108 12;
+  --danger: 200 40 40;
+  --success: 22 143 82;
+}
+.dark {
+  --canvas: 9 14 22;
+  --surface: 19 27 39;
+  --surface-2: 27 37 51;
+  --line: 40 53 71;
+  --ink: 233 239 246;
+  --muted: 141 156 175;
+  --primary: 28 176 158;
+  --primary-soft: 20 47 46;
+  --on-primary: 5 20 18;
+  --accent: 232 160 48;
+  --danger: 240 96 96;
+  --success: 52 190 120;
+}
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.tnum {
+  font-variant-numeric: tabular-nums;
+}

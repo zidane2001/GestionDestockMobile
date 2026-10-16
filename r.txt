@@ -1,0 +1,1 @@
+{"code":"23502","details":"Failing row contains (null, verif-schema).","hint":null,"message":"null value in column \"user_id\" of relation \"boutique_tenants\" violates not-null constraint"}

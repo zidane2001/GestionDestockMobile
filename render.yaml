@@ -1,0 +1,25 @@
+# Blueprint Render du site Ma Boutique.
+# Le code du site se trouve dans site/ ; ce fichier doit rester à la racine
+# du dépôt pour que Render le détecte.
+services:
+  - type: web
+    name: ma-boutique-site
+    runtime: node
+    plan: free
+    region: frankfurt
+    rootDir: site
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: LIEN_APK
+        value: https://github.com/zidane2001/GestionDestockMobile/releases

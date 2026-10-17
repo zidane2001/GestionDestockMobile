@@ -59,9 +59,9 @@
 
 ## 6. Résultat
 
-- **Statut global :** PASS après correction et rejeu des écarts détectés.
+- **Statut global :** PARTIEL ; certains parcours et contrôles de sécurité restent à rejouer. Voir le rapport détaillé, qui prévaut sur ce résumé.
 - **Preuves :** dossier `qa/evidence/2026-10-16/`.
 - **Exécution :** 362 tests automatisés, analyse statique sans erreur, APK debug construit/installé, parcours UI Android exécutés.
 - **Écarts corrigés pendant l'UAT :** reprise automatique après reconnexion, rechargement du compte boutique, réconciliation légère du compte, badge de file silencieuse, isolement des DELETE temps réel.
-- **Critères non testés :** biométrie matérielle, envoi e-mail, partage vers une application tierce et push système.
+- **Critères non testés ou incomplets :** échange, garde de prix nul en interface, deux appareils vierges, écritures inter-boutiques et dernier correctif du badge en interface ; biométrie matérielle, e-mail, partage externe et push système sont exclus.
 - **Nettoyage :** lignes métier de la fixture supprimées du serveur et données locales Android effacées. L'identité technique Supabase Auth créée pour la fixture nécessite une suppression administrative côté serveur, sans impact sur les tables métier.

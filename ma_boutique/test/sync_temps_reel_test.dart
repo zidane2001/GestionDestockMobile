@@ -4,6 +4,80 @@ import 'package:ma_boutique/providers/app_provider.dart';
 import 'package:ma_boutique/services/sync_service.dart';
 
 void main() {
+  group('protection de la réconciliation du compte', () {
+    test(
+      'préserve la boutique locale avec une modification en attente',
+      () async {
+        var ecritures = 0;
+        final appliquee = await appliquerSiAucuneOperationEnAttente(
+          lireFile: () async => [
+            {'tableName': 'boutiques', 'rowId': 'b1'},
+          ],
+          table: 'boutiques',
+          id: 'b1',
+          appliquer: () async {
+            ecritures++;
+          },
+        );
+        expect(appliquee, isFalse);
+        expect(ecritures, 0);
+      },
+    );
+
+    test('applique la boutique distante quand la file est vide', () async {
+      var ecritures = 0;
+      final appliquee = await appliquerSiAucuneOperationEnAttente(
+        lireFile: () async => [],
+        table: 'boutiques',
+        id: 'b1',
+        appliquer: () async {
+          ecritures++;
+        },
+      );
+      expect(appliquee, isTrue);
+      expect(ecritures, 1);
+    });
+
+    test(
+      'une autre ligne ou table en attente ne bloque pas le compte',
+      () async {
+        var ecritures = 0;
+        final appliquee = await appliquerSiAucuneOperationEnAttente(
+          lireFile: () async => [
+            {'tableName': 'boutiques', 'rowId': 'b2'},
+            {'tableName': 'produits', 'rowId': 'b1'},
+          ],
+          table: 'boutiques',
+          id: 'b1',
+          appliquer: () async {
+            ecritures++;
+          },
+        );
+        expect(appliquee, isTrue);
+        expect(ecritures, 1);
+      },
+    );
+
+    test(
+      'une erreur de lecture ne déclenche pas l’écriture distante',
+      () async {
+        var ecritures = 0;
+        await expectLater(
+          appliquerSiAucuneOperationEnAttente(
+            lireFile: () async => throw StateError('file indisponible'),
+            table: 'boutiques',
+            id: 'b1',
+            appliquer: () async {
+              ecritures++;
+            },
+          ),
+          throwsStateError,
+        );
+        expect(ecritures, 0);
+      },
+    );
+  });
+
   group('tablesSynchronisees', () {
     test('couvre les 10 tables du tenant', () {
       expect(tablesSynchronisees.length, 10);

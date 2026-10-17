@@ -309,6 +309,23 @@ String _nomEvenement(PostgresChangeEvent evenement) {
   }
 }
 
+/// Évite d'appliquer une ligne distante lorsqu'une écriture locale est en file.
+/// La lecture de la file et l'écriture ne sont pas atomiques.
+@visibleForTesting
+Future<bool> appliquerSiAucuneOperationEnAttente({
+  required Future<List<Map<String, Object?>>> Function() lireFile,
+  required String table,
+  required String id,
+  required Future<void> Function() appliquer,
+}) async {
+  final file = await lireFile();
+  if (file.any((op) => op['tableName'] == table && op['rowId'] == id)) {
+    return false;
+  }
+  await appliquer();
+  return true;
+}
+
 class SyncService {
   final DatabaseHelper _db;
   bool _enCours = false;
@@ -539,7 +556,16 @@ class SyncService {
         }
       }
       if (ligneLocale != null && mapEquals(ligneLocale, ligneDistante)) return;
-      await _db.inserer('boutiques', ligneDistante);
+      // Ne pas remplacer une modification locale qui attend son envoi.
+      // Une transaction regroupant l'écriture locale et la file reste
+      // nécessaire pour éliminer complètement les courses concurrentes.
+      final appliquee = await appliquerSiAucuneOperationEnAttente(
+        lireFile: () => _db.listeSyncQueue(boutiqueId: boutiqueId),
+        table: 'boutiques',
+        id: boutiqueId,
+        appliquer: () => _db.inserer('boutiques', ligneDistante),
+      );
+      if (!appliquee) return;
       await provider.chargerDepuisBase();
       provider.signalerMajDistante('boutiques');
     } catch (_) {

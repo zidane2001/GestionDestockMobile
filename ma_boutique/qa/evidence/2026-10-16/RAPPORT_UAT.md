@@ -2,7 +2,7 @@
 
 ## Verdict
 
-**PASS après correction et rejeu.** Les parcours métier, les rôles, la recherche instantanée, le hors-ligne, le temps réel et l'isolation locataire ont été exécutés sur l'APK Android construit depuis le dépôt GitHub.
+**PARTIEL — réserves importantes.** Plusieurs parcours ont été exécutés sur Android et des anomalies corrigées, mais tous les cas ne sont pas validés de bout en bout. Ce rapport ne constitue pas une validation de production.
 
 ## Résultats par parcours
 
@@ -15,8 +15,8 @@
 | 05 Stock | PASS | Café, Chemise et Rupture créés ; stock zéro signalé. |
 | 06 Recherche | PASS | Suggestion `Caf` immédiate en UI ; accents et faute `chemisse` couverts par les tests dédiés. |
 | 07 Vente | PASS | Stock, caisse, activité et notification cohérents. |
-| 08 Gardes vente | PASS | Survente refusée sans mutation. |
-| 09 Défectueux / retour | PASS | Description obligatoire, retrait de stock et remboursement validés. |
+| 08 Gardes vente | PARTIEL | Survente refusée sans mutation ; le garde de prix zéro reste à rejouer en interface. |
+| 09 Défectueux / retour | PARTIEL | Description obligatoire, retrait de stock et remboursement validés ; parcours d'échange à rejouer. |
 | 10 Caisse | PASS | Dépense et sortie valides ; solde négatif refusé. |
 | 11 Rôles | PASS | Patron, Manager et Caissière connectés ; actions masquées selon permissions. |
 | 12 Pointage | PASS | Arrivée et départ Manager visibles dans la vue Patron. |
@@ -24,7 +24,7 @@
 | 14 Hors-ligne | PASS après correction | File créée hors ligne puis vidée automatiquement au retour du réseau. |
 | 15 Temps réel stock | PASS | Un second client authentifié modifie le stock ; l'application reçoit la quantité sans action manuelle. |
 | 16 Temps réel compte | PASS après correction | Nom du compte distant reçu puis restauré en quelques secondes. |
-| 17 Isolation | PASS | RLS ne retourne aucune boutique/ligne étrangère ; tests INSERT/UPDATE/DELETE filtrés réussis. |
+| 17 Isolation | PARTIEL | Lecture vérifiée et filtrage des événements couvert par tests unitaires ; les refus d'écriture inter-boutiques par RLS ne sont pas validés en bout en bout. |
 | 18 Nettoyage | PASS avec résidu Auth | Boutique et lignes métier supprimées ; données locales effacées. Seule l'identité technique Auth exige un administrateur serveur. |
 
 ## Bugs détectés et corrigés
@@ -38,5 +38,8 @@
 ## Limites observées
 
 - L'import initial d'une boutique sur un téléphone totalement neuf doit être remplacé par une API/RPC serveur sécurisée ; la clé `service_role` n'est volontairement plus embarquée dans l'application mobile.
+- Le dernier correctif du badge de synchronisation a passé les tests automatisés, mais n'a pas encore été rejoué sur un nouvel APK en interface.
+- La synchronisation sur deux appareils vierges, les conflits de modifications et les refus d'écriture inter-boutiques restent à tester avec un environnement de test adapté.
+- Des secrets privilégiés historiques figurent dans des scripts du dépôt : leur révocation et rotation par l'administrateur sont nécessaires ; supprimer seulement les valeurs locales ne suffit pas.
 - L'identité Supabase Auth technique d'une boutique supprimée doit être nettoyée par une fonction serveur privilégiée.
 - Les plugins `mobile_scanner` et `share_plus` émettent un avertissement de migration Kotlin lors du build, sans échec de compilation.

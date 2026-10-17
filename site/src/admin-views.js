@@ -152,8 +152,9 @@ export function pageTableauDeBord({ versions = [], abonnements = [], message = '
           <input id="publiee_le" name="publiee_le" type="date">
         </div>
         <div class="champ">
-          <label for="lien_apk">Lien de téléchargement (facultatif)</label>
-          <input id="lien_apk" name="lien_apk" type="url" placeholder="https://github.com/…/releases/download/…">
+          <label for="lien_apk">URL source de l'APK (facultatif)</label>
+          <input id="lien_apk" name="lien_apk" type="url" placeholder="https://…/ma-boutique-1.1.0.apk">
+          <small>Le site récupère ce fichier une fois puis le sert directement : le visiteur ne voit jamais cette adresse.</small>
         </div>
         <div class="champ champ--large">
           <label for="notes">Notes de version (une ligne par point)</label>

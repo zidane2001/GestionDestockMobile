@@ -15,6 +15,8 @@ protégé** pour publier les mises à jour et suivre les demandes.
 | `/admin` | Connexion administrateur (mot de passe unique) |
 | `/admin/tableau-de-bord` | Publier/supprimer une version, suivre les abonnements |
 | `/admin/abonnes.csv` | Export CSV des demandes (protégé) |
+| `/telechargement/ma-boutique.apk` | Téléchargement **direct** de l'APK (aucune redirection) |
+| `/telechargement/ma-boutique-<version>.apk` | Téléchargement d'une version précise |
 | `/health` | Sonde de disponibilité pour Render |
 
 ## Démarrage local
@@ -49,7 +51,9 @@ mot de passe erroné, session falsifiée, publication, export CSV).
 | `DATABASE_URL` | en production | Postgres (Neon, Render…). `sslmode=require` recommandé |
 | `ADMIN_PASSWORD` | oui | Mot de passe du back-office (8 caractères minimum) |
 | `SESSION_SECRET` | oui | Signature des cookies de session (16 caractères minimum) |
-| `LIEN_APK` | non | Lien de téléchargement par défaut (sinon page Releases GitHub) |
+| `LIEN_APK` | non | URL **source** de l'APK : le site la récupère une fois puis sert le fichier lui-même |
+| `APK_PATH` | non | Fichier APK déjà présent sur le disque, servi tel quel |
+| `APK_CACHE_DIR` | non | Dossier de cache de l'APK (défaut `site/.apk`, ignoré par Git) |
 | `PORT` | non | Fourni par Render |
 
 Générer un secret : `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`.
@@ -69,11 +73,27 @@ Générer un secret : `node -e "console.log(require('crypto').randomBytes(32).to
 3. Renseigner dans Render : `DATABASE_URL`, `ADMIN_PASSWORD` ; `SESSION_SECRET` est généré.
 4. Après déploiement, vérifier `/health`, puis `/admin` et une publication de test.
 
+## Téléchargement : aucun détour par un hébergeur
+
+Les boutons pointent vers `/telechargement/ma-boutique.apk`, servi par le site
+avec `Content-Disposition: attachment` : le navigateur enregistre le fichier
+sans changer de page ni afficher d'adresse externe.
+
+Ordre de résolution du fichier :
+
+1. `APK_PATH` (fichier déjà sur le disque) ;
+2. cache local `APK_CACHE_DIR` — alimenté au build par `npm run prepare-apk`
+   ou à la première demande ;
+3. URL source de la version (ou `LIEN_APK`) : le serveur la récupère, la met en
+   cache et l'envoie en flux au visiteur (un seul passage réseau, pas de
+   200 Mo en mémoire).
+
 ## Publier une mise à jour de l'application
 
-1. Construire l'APK et le déposer dans les *Releases* GitHub du dépôt.
+1. Construire l'APK et le déposer où il est accessible par URL (Release GitHub,
+   stockage objet…), puis mettre à jour `LIEN_APK` sur Render.
 2. Se connecter à `/admin`.
-3. Renseigner : numéro de version, titre, date, lien direct du fichier APK,
-   notes (une ligne par point).
+3. Renseigner : numéro de version, titre, date, URL **source** de l'APK, notes
+   (une ligne par point).
 4. Publier : la page `/mises-a-jour` et le bouton de téléchargement de l'accueil
-   pointent immédiatement vers cette version.
+   servent immédiatement cette version, toujours depuis le domaine du site.

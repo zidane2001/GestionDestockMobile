@@ -30,6 +30,7 @@ import {
   pageMisesAJour,
 } from './views.js';
 import { pageConnexion, pageTableauDeBord } from './admin-views.js';
+import { servirApk } from './telechargement.js';
 
 const DOSSIER = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(DOSSIER, '..', 'public');
@@ -118,6 +119,23 @@ export function creerApplication() {
   );
 
   app.get('/health', (req, res) => res.type('text').send('ok'));
+
+  // ---------- Téléchargement direct de l'APK ----------
+  // Le fichier part du site : le visiteur ne voit aucune redirection.
+
+  app.get(
+    '/telechargement/ma-boutique.apk',
+    routeAsync(async (req, res) => {
+      await servirApk(req, res);
+    }),
+  );
+
+  app.get(
+    '/telechargement/ma-boutique-:version.apk',
+    routeAsync(async (req, res) => {
+      await servirApk(req, res, req.params.version);
+    }),
+  );
 
   // ---------- Souscription ----------
 

@@ -188,7 +188,7 @@ test('publier une version l’ajoute au journal public', async () => {
   assert.match(html, /v1\.1\.0/);
   assert.match(html, /Reprise réseau améliorée/);
   assert.match(html, /Nouveau bandeau hors ligne/);
-  assert.match(html, /app-1\.1\.0\.apk/);
+  assert.match(html, /\/telechargement\/ma-boutique-1\.1\.0\.apk/);
 });
 
 test('l’export CSV contient les inscrits et n’est pas public', async () => {

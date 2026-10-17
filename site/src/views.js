@@ -22,12 +22,16 @@ function dateFr(valeur) {
   });
 }
 
-const LIEN_RELEASES_DEFAUT = 'https://github.com/zidane2001/GestionDestockMobile/releases';
+/// Le téléchargement passe toujours par le site : le visiteur ne quitte jamais
+/// la page, le fichier part directement dans son dossier de téléchargements.
+const LIEN_TELECHARGEMENT = '/telechargement/ma-boutique.apk';
 
-export function lienTelechargement(versions = []) {
-  const derniere = versions[0];
-  if (derniere?.lien_apk) return derniere.lien_apk;
-  return process.env.LIEN_APK || LIEN_RELEASES_DEFAUT;
+export function lienTelechargement() {
+  return LIEN_TELECHARGEMENT;
+}
+
+function lienVersion(version) {
+  return `/telechargement/ma-boutique-${encodeURIComponent(version)}.apk`;
 }
 
 const NAVIGATION = [
@@ -105,8 +109,8 @@ function carteFonctionnalite({ icone, titre, texte }) {
   </article>`;
 }
 
-function blocVersion(version, { compact = false, lienParDefaut = '' } = {}) {
-  const lienVersion = version.lien_apk || lienParDefaut;
+function blocVersion(version, { compact = false, telechargeable = true } = {}) {
+  const cible = telechargeable ? lienVersion(version.version) : '';
   const notes = (version.notes || '')
     .split('\n')
     .map((ligne) => ligne.trim())
@@ -122,15 +126,15 @@ function blocVersion(version, { compact = false, lienParDefaut = '' } = {}) {
     <h3>${echapper(version.titre)}</h3>
     ${notes ? `<ul class="version__notes">${notes}</ul>` : ''}
     ${
-      lienVersion
-        ? `<a class="lien-fleche" href="${echapper(lienVersion)}" rel="noopener">Télécharger cette version</a>`
+      cible
+        ? `<a class="lien-fleche" href="${echapper(cible)}">Télécharger cette version</a>`
         : ''
     }
   </article>`;
 }
 
 export function pageAccueil({ versions = [], abonnes = 0 }) {
-  const lien = lienTelechargement(versions);
+  const lien = lienTelechargement();
   const derniere = versions[0];
 
   const contenu = `
@@ -146,7 +150,7 @@ export function pageAccueil({ versions = [], abonnes = 0 }) {
       </p>
       <div class="hero__actions">
         <a class="bouton" href="#souscrire">Souscrire à l'application</a>
-        <a class="bouton bouton--fantome" href="${echapper(lien)}" rel="noopener">
+        <a class="bouton bouton--fantome" href="${echapper(lien)}" download>
           Télécharger l'APK${derniere ? ` · v${echapper(derniere.version)}` : ''}
         </a>
       </div>
@@ -374,9 +378,9 @@ export function pageFonctionnalites() {
 }
 
 export function pageMisesAJour({ versions = [] }) {
-  const lienParDefaut = process.env.LIEN_APK || LIEN_RELEASES_DEFAUT;
+  const telechargeable = versions.some((v) => v.lien_apk) || Boolean(process.env.LIEN_APK);
   const liste = versions.length
-    ? versions.map((v) => blocVersion(v, { lienParDefaut })).join('')
+    ? versions.map((v) => blocVersion(v, { telechargeable })).join('')
     : '<p class="vide">Aucune version publiée pour le moment.</p>';
 
   const contenu = `
@@ -400,7 +404,7 @@ export function pageMisesAJour({ versions = [] }) {
 }
 
 export function pageInstaller({ versions = [] }) {
-  const lien = lienTelechargement(versions);
+  const lien = lienTelechargement();
   const derniere = versions[0];
 
   const contenu = `
@@ -414,7 +418,7 @@ export function pageInstaller({ versions = [] }) {
       }</p>
     </header>
     <ol class="etapes">
-      <li><strong>Télécharger l'APK</strong><span>Depuis <a href="${echapper(lien)}" rel="noopener">la page de téléchargement</a>, sur le téléphone qui servira en boutique.</span></li>
+      <li><strong>Télécharger l'APK</strong><span>Avec <a href="${echapper(lien)}" download>le bouton de téléchargement</a>, sur le téléphone qui servira en boutique : le fichier se range directement dans vos téléchargements.</span></li>
       <li><strong>Autoriser l'installation</strong><span>Android demande d'accepter les applications de source inconnue pour le navigateur ou le gestionnaire de fichiers utilisé.</span></li>
       <li><strong>Ouvrir le fichier</strong><span>L'installation prend quelques secondes ; l'icône Ma Boutique apparaît sur l'écran d'accueil.</span></li>
       <li><strong>Créer ou rejoindre la boutique</strong><span>Au premier lancement, créez la boutique du patron, puis les comptes des employés depuis l'application.</span></li>
@@ -427,7 +431,7 @@ export function pageInstaller({ versions = [] }) {
         <li>Une connexion est utile pour la synchronisation, pas pour vendre.</li>
       </ul>
     </div>
-    <p><a class="bouton" href="${echapper(lien)}" rel="noopener">Télécharger l'APK</a></p>
+    <p><a class="bouton" href="${echapper(lien)}" download>Télécharger l'APK</a></p>
   </div>
 </section>`;
   return layout({

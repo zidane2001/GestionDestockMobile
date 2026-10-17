@@ -11,7 +11,8 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "test": "node --test",
-    "captures": "node scripts/copier-captures.mjs"
+    "captures": "node scripts/copier-captures.mjs",
+    "prepare-apk": "node scripts/preparer-apk.mjs"
   },
   "dependencies": {
     "express": "^4.21.2",

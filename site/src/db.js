@@ -21,9 +21,15 @@ export async function initialiserBase() {
   if (url) {
     const { default: pg } = await import('pg');
     const local = /localhost|127\.0\.0\.1/.test(url);
+    // `sslmode` et `channel_binding` sont retirés de l'URL : le TLS est piloté
+    // explicitement ci-dessous, ce qui évite les avertissements de pg et garde
+    // la vérification du certificat active (sauf demande contraire).
+    const adresse = new URL(url);
+    adresse.searchParams.delete('sslmode');
+    adresse.searchParams.delete('channel_binding');
     const pool = new pg.Pool({
-      connectionString: url,
-      ssl: local ? false : { rejectUnauthorized: false },
+      connectionString: adresse.toString(),
+      ssl: local ? false : { rejectUnauthorized: process.env.DATABASE_SSL_VERIFY !== 'false' },
       max: 5,
     });
     executer = (texte, params = []) => pool.query(texte, params);

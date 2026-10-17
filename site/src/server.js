@@ -15,7 +15,9 @@ if ((await listerVersions()).length === 0) {
     notes:
       "Première version publiée : gestion du stock, ventes, caisse, retours, dépenses et pointage.\n" +
       'Fonctionnement hors ligne et synchronisation temps réel entre les appareils de la boutique.',
-    lienApk: process.env.LIEN_APK || 'https://github.com/zidane2001/GestionDestockMobile/releases',
+    // Aucune URL par défaut : mieux vaut un message clair qu'un téléchargement
+    // qui servirait une page web à la place du fichier APK.
+    lienApk: process.env.LIEN_APK || '',
     publieeLe: null,
   });
   console.log('Version initiale publiée dans le journal.');

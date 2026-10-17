@@ -68,6 +68,23 @@ test('la version demandée est servie par la même route', async () => {
   assert.doesNotMatch(reponse.headers.get('location') ?? '', /github\.com/);
 });
 
+test('une source qui renvoie une page web n’est jamais servie comme APK', async () => {
+  delete process.env.APK_PATH;
+  await creerVersion({
+    version: '4.0.0',
+    titre: 'Source HTML',
+    notes: '',
+    lienApk: `${base}/health`,
+    publieeLe: null,
+  });
+
+  const reponse = await fetch(base + '/telechargement/ma-boutique-4.0.0.apk', {
+    redirect: 'manual',
+  });
+  assert.equal(reponse.status, 502);
+  assert.match(await reponse.text(), /momentanément indisponible/);
+});
+
 test('une source distante injoignable renvoie une erreur claire', async () => {
   delete process.env.APK_PATH;
   await creerVersion({

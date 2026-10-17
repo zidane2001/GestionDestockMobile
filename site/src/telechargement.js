@@ -72,6 +72,14 @@ async function servirDepuisSource(res, url, nom) {
     throw Object.assign(new Error(`Source APK indisponible (${reponse.status})`), { statut: 502 });
   }
 
+  // Garde-fou : une URL qui renvoie une page web (au lieu d'un binaire) ne doit
+  // jamais être présentée au visiteur comme l'application.
+  const type = (reponse.headers.get('content-type') || '').toLowerCase();
+  const estBinaire = /octet-stream|android|zip/.test(type) || /\.apk(\?|$)/i.test(url);
+  if (!estBinaire) {
+    throw Object.assign(new Error(`Source non binaire (${type || 'sans type'})`), { statut: 502 });
+  }
+
   const longueur = Number(reponse.headers.get('content-length') || 0);
   const final = cheminCache(url);
   const temporaire = `${final}.part`;

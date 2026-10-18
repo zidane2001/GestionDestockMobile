@@ -6,7 +6,8 @@
 import { mkdir, rename, stat, unlink } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import path from 'node:path';
-import { Readable, pipeline } from 'node:stream';
+import { Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { cheminCache } from '../src/telechargement.js';
 
 const url = process.env.LIEN_APK;
@@ -36,7 +37,15 @@ if (!reponse.ok || !reponse.body) {
 }
 
 const temporaire = `${cible}.part`;
-await pipeline(Readable.fromWeb(reponse.body), createWriteStream(temporaire));
+// Le pré-téléchargement est une optimisation : un incident réseau ou disque ne
+// doit jamais faire échouer la build, le site sait servir l'APK à la demande.
+try {
+  await pipeline(Readable.fromWeb(reponse.body), createWriteStream(temporaire));
+} catch (erreur) {
+  await unlink(temporaire).catch(() => {});
+  console.warn(`Pré-téléchargement interrompu (${erreur.message}) : le site servira à la demande.`);
+  process.exit(0);
+}
 
 const { size } = await stat(temporaire);
 if (size < 1024 * 1024) {

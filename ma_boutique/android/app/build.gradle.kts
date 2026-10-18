@@ -1,7 +1,17 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// Signature de production lue dans android/key.properties (fichier ignoré par
+// Git, comme le keystore). Absent — autre machine, intégration continue — le
+// build retombe sur la clé debug pour ne pas échouer.
+val fichierCle = rootProject.file("key.properties")
+val proprietesCle = Properties().apply {
+    if (fichierCle.exists()) fichierCle.inputStream().use { load(it) }
 }
 
 android {
@@ -29,11 +39,26 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (fichierCle.exists()) {
+            create("release") {
+                keyAlias = proprietesCle["keyAlias"] as String
+                keyPassword = proprietesCle["keyPassword"] as String
+                storeFile = file(proprietesCle["storeFile"] as String)
+                storePassword = proprietesCle["storePassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Le keystore de production signe les APK distribués : sans lui, les
+            // mises à jour ne pourraient pas s'installer par-dessus les précédentes.
+            signingConfig = if (fichierCle.exists()) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }

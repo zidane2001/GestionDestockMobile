@@ -51,7 +51,7 @@ mot de passe erroné, session falsifiée, publication, export CSV).
 | `DATABASE_URL` | en production | Postgres (Neon, Render…). `sslmode=require` recommandé |
 | `ADMIN_PASSWORD` | oui | Mot de passe du back-office (8 caractères minimum) |
 | `SESSION_SECRET` | oui | Signature des cookies de session (16 caractères minimum) |
-| `LIEN_APK` | non | URL **source** de l'APK : le site la récupère une fois puis sert le fichier lui-même |
+| `LIEN_APK` | non | URL **source** de l'APK (stockage objet du projet) : le site la récupère une fois puis sert le fichier lui-même |
 | `APK_PATH` | non | Fichier APK déjà présent sur le disque, servi tel quel |
 | `APK_CACHE_DIR` | non | Dossier de cache de l'APK (défaut `site/.apk`, ignoré par Git) |
 | `PORT` | non | Fourni par Render |
@@ -69,9 +69,12 @@ Générer un secret : `node -e "console.log(require('crypto').randomBytes(32).to
 ## Déploiement Render
 
 1. Créer la base Postgres chez Neon et récupérer la chaîne de connexion.
-2. `render.yaml` décrit le service web (`rootDir: site`, `npm ci --omit=dev`, `npm start`).
+2. `render.yaml` décrit le service web (`rootDir: site`, `npm ci --omit=dev && node scripts/preparer-apk.mjs`, `npm start`).
 3. Renseigner dans Render : `DATABASE_URL`, `ADMIN_PASSWORD` ; `SESSION_SECRET` est généré.
 4. Après déploiement, vérifier `/health`, puis `/admin` et une publication de test.
+
+Le service public est **https://ma-boutique-site.onrender.com** ; un `git push`
+sur `main` redéploie automatiquement.
 
 ## Téléchargement : aucun détour par un hébergeur
 
@@ -90,10 +93,48 @@ Ordre de résolution du fichier :
 
 ## Publier une mise à jour de l'application
 
-1. Construire l'APK et le déposer où il est accessible par URL (Release GitHub,
-   stockage objet…), puis mettre à jour `LIEN_APK` sur Render.
-2. Se connecter à `/admin`.
-3. Renseigner : numéro de version, titre, date, URL **source** de l'APK, notes
-   (une ligne par point).
-4. Publier : la page `/mises-a-jour` et le bouton de téléchargement de l'accueil
-   servent immédiatement cette version, toujours depuis le domaine du site.
+L'APK vit dans le bucket `versions` du stockage objet du projet, pas sur un
+hébergeur tiers : le visiteur télécharge toujours depuis le domaine du site.
+
+```bash
+# 1. Construire l'APK signé (voir « Signature » plus bas)
+cd ma_boutique && flutter build apk --release
+
+# 2. Le déposer et le relier à sa version (envoi multipart, reprise par tranche)
+cd ../site && npm run publier-apk -- ../ma_boutique/build/app/outputs/flutter-apk/app-release.apk 1.2.0
+```
+
+`publier-apk` affiche la taille, le **SHA-256** et l'URL ; il met à jour
+`ma-boutique.apk` (lien stable du bouton d'accueil) et le champ `lien_apk` de la
+version en base. Si le stockage refuse la lecture anonyme, ajouter les variables
+`AWS_ENDPOINT_URL_S3`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`
+dans Render : le site signe alors ses requêtes.
+
+3. Se connecter à `/admin` et déclarer la version : numéro, titre, date, notes
+   (une ligne par point). Le lien source est déjà en place ; le champ ne sert que
+   pour une source externe ponctuelle.
+4. Publier : `/mises-a-jour` et le bouton d'accueil servent immédiatement cette
+   version, toujours depuis le domaine du site.
+
+Pour ne pas rapatrier l'APK à la première visite, la build Render exécute
+`node scripts/preparer-apk.mjs`, qui le pré-charge en cache dès le déploiement.
+
+## Signature de l'application
+
+Les APK distribués sont signés par la clé de production
+`ma_boutique/android/keystore/ma-boutique-upload.jks` (alias `ma-boutique`),
+via `ma_boutique/android/key.properties`. Les deux fichiers sont **ignorés par
+Git** : sans eux, plus aucune mise à jour ne peut s'installer par-dessus une
+version déjà déployée.
+
+> Sauvegarder le keystore et `key.properties` hors du dépôt (gestionnaire de mots
+de passe, disque chiffré). Perdre cette clé = tous les utilisateurs doivent
+désinstaller puis réinstaller l'application.
+
+Contrôle après build :
+
+```bash
+$ANDROID_HOME/build-tools/<version>/apksigner verify --print-certs \
+  build/app/outputs/flutter-apk/app-release.apk
+# doit afficher : CN=Ma Boutique — et non « Android Debug »
+```

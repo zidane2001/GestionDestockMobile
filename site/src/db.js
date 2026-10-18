@@ -108,6 +108,14 @@ export async function supprimerVersion(id) {
   return Boolean(lignes[0]);
 }
 
+export async function creerLienVersion(version, lienApk) {
+  const lignes = await requete(
+    'UPDATE versions SET lien_apk = $2 WHERE version = $1 RETURNING id',
+    [version, lienApk],
+  );
+  return Boolean(lignes[0]);
+}
+
 // ---------- Abonnements ----------
 
 export async function enregistrerAbonnement({

@@ -21,5 +21,7 @@ services:
         sync: false
       - key: SESSION_SECRET
         generateValue: true
+      # Source de l'APK : stockage objet du projet. Le visiteur ne la voit jamais,
+      # il télécharge depuis le domaine du site (voir /telechargement/).
       - key: LIEN_APK
-        value: https://github.com/zidane2001/GestionDestockMobile/releases
+        value: https://br-empty-wave-b515tz37.storage.c-7.us-east-2.aws.neon.tech/versions/ma-boutique.apk

@@ -413,7 +413,12 @@ class AppProvider extends ChangeNotifier {
     if (b == null) return;
     _boutique = b.copyWith(soldeCaisse: b.soldeCaisse + delta);
     _persistBoutique();
-    _enregistrerSync('boutiques', 'upsert', _boutique!.id, _boutique!.toMap());
+    // La caisse est recalculée par les triggers serveur (vente/dépense).
+    // Seul le patron envoie la ligne boutique, pour les autres réglages.
+    final s = session;
+    if (s != null && peut(s, Permission.gererComptes)) {
+      _enregistrerSync('boutiques', 'upsert', _boutique!.id, _boutique!.toMap());
+    }
   }
 
   void _compterSync() {
@@ -485,7 +490,10 @@ class AppProvider extends ChangeNotifier {
     );
     if (!resultat.ok) {
       if (!silencieux) {
-        notifier('Synchronisation impossible pour le moment.', TonToast.erreur);
+        notifier(
+          'Synchronisation impossible pour le moment (serveur ou droits).',
+          TonToast.erreur,
+        );
       }
       return;
     }
@@ -637,8 +645,15 @@ class AppProvider extends ChangeNotifier {
       _enregistrerSync('appareils', 'upsert', a.id, a.toMap());
     }
     notifier('Boutique créée. Bienvenue !');
-    unawaited(_synchroniser());
-    unawaited(_activerTempsReel());
+    unawaited(_demarrerEtSynchroniser());
+  }
+
+  /// La boutique vient d'être créée localement : le serveur doit d'abord
+  /// recevoir la fiche patron et lier cet appareil avant toute synchro.
+  Future<void> _demarrerEtSynchroniser() async {
+    await _sync?.demarrerBoutique(this);
+    await _synchroniser();
+    await _activerTempsReel();
   }
 
   void definirLogo(String? logoUrl) {
@@ -693,8 +708,78 @@ class AppProvider extends ChangeNotifier {
     _verrouille = employe.pinActif;
     _db.setSetting('session_id', employe.id);
     _journaliser(NotifType.connexion, 'Connexion de ${employe.nom}');
+    // Relie l'appareil à cet employé (rôle côté serveur) puis rapatrie ce
+    // que son rôle a le droit de voir.
+    unawaited(_synchroniser(silencieux: true));
     unawaited(_activerTempsReel());
     return null;
+  }
+
+  /// Rattache cet appareil à une boutique déjà présente sur le serveur.
+  /// Le rôle et le mot de passe sont vérifiés côté serveur, puis l'état du
+  /// tenant est rapatrié : un téléphone neuf n'a besoin d'aucune clé
+  /// privilégiée ni d'un export manuel de la base.
+  Future<String?> rejoindreBoutique({
+    required String nom,
+    required Role role,
+    required String motDePasse,
+  }) async {
+    final sync = _sync;
+    if (sync == null || !sync.configure) {
+      return 'Synchronisation serveur non configurée.';
+    }
+    try {
+      final boutiqueId = await sync.identifierBoutique(
+        nom: nom.trim(),
+        role: role.name,
+        motDePasse: motDePasse,
+      );
+      if (boutiqueId == null) {
+        return 'Nom de boutique ou mot de passe incorrect.';
+      }
+      final res = await sync.rejoindreBoutique(
+        boutiqueId,
+        nom.trim(),
+        role.name,
+        motDePasse,
+      );
+      if (res == null || res.boutique == null || res.employe == null) {
+        return 'Connexion au serveur impossible. Vérifiez le réseau puis réessayez.';
+      }
+      await importerBoutiqueDepuisSupabase(res.boutique!);
+      await importerEmployeDepuisSupabase(res.employe!);
+      return null;
+    } catch (_) {
+      return 'Connexion au serveur impossible. Vérifiez le réseau puis réessayez.';
+    }
+  }
+
+  /// Importe une fiche employé renvoyée par le serveur (rattachement).
+  Future<void> importerEmployeDepuisSupabase(Map<String, dynamic> row) async {
+    final emp = Employe(
+      id: row['id'] as String,
+      nom: row['nom'] as String? ?? '',
+      role: RoleX.fromName(row['role'] as String? ?? 'patron'),
+      permissions: (row['permissions'] as String? ?? '')
+          .split(',')
+          .where((p) => p.isNotEmpty)
+          .map(PermissionX.fromName)
+          .toList(),
+      motDePasse: row['mot_de_passe'] as String? ?? '',
+      statut: StatutEmployeX.fromName(row['statut'] as String? ?? 'actif'),
+      pinActif: row['pin_actif'] == true,
+      pin: row['pin'] as String? ?? '',
+      biometrie: row['biometrie'] == true,
+      dateCreation: row['date_creation'] as String? ?? '',
+    );
+    final data = emp.toMap();
+    data['boutique_id'] = row['boutique_id'] as String? ?? _boutique?.id ?? '';
+    _employes = [
+      for (final e in _employes)
+        if (e.id != emp.id) e,
+      emp,
+    ];
+    await _db.inserer('employes', data);
   }
 
   /// Importe une boutique depuis une row Supabase dans la base locale.
@@ -720,47 +805,7 @@ class AppProvider extends ChangeNotifier {
     );
     _boutique = b;
     await _db.inserer('boutiques', b.toMap());
-    _enregistrerSync('boutiques', 'upsert', b.id, b.toMap());
     notifyListeners();
-  }
-
-  /// Importe un employé depuis une row Supabase dans la base locale.
-  Future<void> importerEmployeDepuisSupabase(Map<String, dynamic> row) async {
-    final emp = Employe(
-      id: row['id'] as String,
-      nom: row['nom'] as String? ?? '',
-      role: RoleX.fromName(row['role'] as String? ?? 'patron'),
-      permissions: _parsePermissions(row['permissions'] as String? ?? ''),
-      motDePasse: row['mot_de_passe'] as String? ?? '',
-      statut: StatutEmployeX.fromName(row['statut'] as String? ?? 'actif'),
-      pinActif: row['pin_actif'] == true,
-      pin: row['pin'] as String? ?? '',
-      biometrie: row['biometrie'] == true,
-      dateCreation: row['date_creation'] as String? ?? '',
-    );
-    final boutiqueId = row['boutique_id'] as String? ?? _boutique?.id ?? '';
-    // Ajouter à la liste locale si pas déjà présent
-    final existant = _employes.indexWhere((e) => e.id == emp.id);
-    if (existant >= 0) {
-      _employes[existant] = emp;
-    } else {
-      _employes.add(emp);
-    }
-    final data = emp.toMap();
-    data['boutique_id'] = boutiqueId;
-    await _db.inserer('employes', data);
-    _enregistrerSync('employes', 'upsert', emp.id, data);
-    notifyListeners();
-  }
-
-  List<Permission> _parsePermissions(String raw) {
-    if (raw.isEmpty) return [];
-    return raw
-        .split(',')
-        .map((p) => p.trim())
-        .where((p) => p.isNotEmpty)
-        .map(PermissionX.fromName)
-        .toList();
   }
 
   void deconnexion() {
@@ -877,9 +922,9 @@ class AppProvider extends ChangeNotifier {
       NotifType.vente,
       [Role.patron, Role.manager, Role.caissiere],
     );
+    // Le stock et la caisse sont mis à jour par les triggers serveur :
+    // une seule écriture de vente suffit, sans exposer le prix d'achat.
     _enregistrerSync('ventes', 'upsert', vente.id, vente.toMap());
-    final produitMaj = produit.copyWith(quantite: produit.quantite - quantite);
-    _enregistrerSync('produits', 'upsert', produitMaj.id, produitMaj.toMap());
     if (produit.quantite - quantite == 0) {
       _pousserNotification(
         'Rupture de stock',
@@ -917,12 +962,6 @@ class AppProvider extends ChangeNotifier {
         if (p.id == produitId) p.copyWith(quantite: p.quantite - 1) else p,
     ];
     _persistProduits();
-    _enregistrerSync(
-      'produits',
-      'upsert',
-      produitId,
-      produit.copyWith(quantite: produit.quantite - 1).toMap(),
-    );
     _retours = [
       Retour(
         id: _uid(),
@@ -985,12 +1024,6 @@ class AppProvider extends ChangeNotifier {
         if (p.id == produitId) p.copyWith(quantite: p.quantite + 1) else p,
     ];
     _persistProduits();
-    _enregistrerSync(
-      'produits',
-      'upsert',
-      produitId,
-      produit.copyWith(quantite: produit.quantite + 1).toMap(),
-    );
     if (motif == MotifRetour.remboursement) _majCaisse(-montant);
     _retours = [
       Retour(

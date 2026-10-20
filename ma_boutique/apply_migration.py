@@ -1,8 +1,10 @@
-"""Applique la migration « temps réel » directement sur Postgres.
+"""Applique une migration SQL directement sur Postgres.
 
 Usage :
-    python apply_migration.py            # applique puis vérifie
-    python apply_migration.py --check    # vérifie seulement
+    python apply_migration.py                      # migration « temps réel »
+    python apply_migration.py --check              # vérifie seulement
+    python apply_migration.py --fichier X.sql       # applique un autre script
+    python apply_migration.py --requete "select 1" # exécute une requête
 
 Le secret est lu dans `.pg_conn.txt` (fichier local ignoré par git) ou dans la
 variable d'environnement `PG_CONN`. Il n'est jamais imprimé : les éventuelles
@@ -19,12 +21,19 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
 CHEMIN_CONN = Path(__file__).with_name(".pg_conn.txt")
 CHEMIN_SQL = Path(__file__).parent / "supabase" / "migration_temps_reel.sql"
 REF_PROJET = "kxgluwdhlgzmgdcszeln"
+
+# L'API Management limite le nombre de requêtes par minute : on espace les
+# appels et on réessaie avec un délai croissant quand elle répond 429.
+PAUSE_ENTRE_REQUETES = 1.1
+MAX_ESSAIS = 8
+ATTENTE_MAX = 65.0
 
 
 def lire_secret():
@@ -62,17 +71,36 @@ class BacAMgmt:
         self.jeton = jeton
 
     def executer(self, instruction):
-        requete = urllib.request.Request(
-            f"https://api.supabase.com/v1/projects/{REF_PROJET}/database/query",
-            data=json.dumps({"query": instruction}).encode(),
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {self.jeton}",
-                "Content-Type": "application/json",
-            },
-        )
-        with urllib.request.urlopen(requete, timeout=30) as reponse:
-            self.derniere = json.loads(reponse.read().decode() or "[]")
+        for essai in range(1, MAX_ESSAIS + 1):
+            requete = urllib.request.Request(
+                f"https://api.supabase.com/v1/projects/{REF_PROJET}/database/query",
+                data=json.dumps({"query": instruction}).encode(),
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {self.jeton}",
+                    "Content-Type": "application/json",
+                },
+            )
+            try:
+                with urllib.request.urlopen(requete, timeout=60) as reponse:
+                    self.derniere = json.loads(reponse.read().decode() or "[]")
+                return
+            except urllib.error.HTTPError as erreur:
+                corps = erreur.read().decode(errors="replace")
+                # 429 = trop de requêtes, 503 = service momentanément indisponible.
+                if erreur.code in (429, 503) and essai < MAX_ESSAIS:
+                    attente = min(ATTENTE_MAX, 2.0 ** essai)
+                    print(f"       (HTTP {erreur.code}, nouvelle tentative dans {attente:.0f}s)", flush=True)
+                    time.sleep(attente)
+                    continue
+                raise RuntimeError(f"HTTP {erreur.code}: {corps[:900]}") from None
+            except urllib.error.URLError as erreur:
+                if essai < MAX_ESSAIS:
+                    attente = min(ATTENTE_MAX, 2.0 ** essai)
+                    print(f"       (réseau: {erreur.reason}, nouvelle tentative dans {attente:.0f}s)")
+                    time.sleep(attente)
+                    continue
+                raise RuntimeError(f"réseau: {erreur.reason}") from None
 
     def requete(self, instruction, params=None):
         self.executer(instruction)
@@ -213,6 +241,16 @@ def verifier(executer_requete):
 
 def main():
     verif_seule = "--check" in sys.argv
+    fichier = None
+    requete_texte = None
+    for index, argument in enumerate(sys.argv):
+        if argument == "--fichier" and index + 1 < len(sys.argv):
+            fichier = Path(sys.argv[index + 1])
+        if argument == "--requete" and index + 1 < len(sys.argv):
+            requete_texte = sys.argv[index + 1]
+    global CHEMIN_SQL
+    if fichier is not None:
+        CHEMIN_SQL = fichier
     secret = lire_secret()
     if secret is None:
         return 2
@@ -222,7 +260,7 @@ def main():
     if type_secret == "management":
         bac = BacAMgmt(valeur)
         executer = bac.executer
-        requete = bac.requete
+        lire = bac.requete
         cible = "API Management Supabase"
     else:
         try:
@@ -243,31 +281,38 @@ def main():
             print(f"ERREUR de connexion: {masquer(erreur)}")
             return 3
         executer = curseur.execute
-        requete = lambda sql, params=None: (curseur.execute(sql, params or []), curseur.fetchall())[1]
+        lire = lambda sql, params=None: (curseur.execute(sql, params or []), curseur.fetchall())[1]
         cible = "Postgres (port 5432)"
 
     try:
+        if requete_texte is not None:
+            for ligne in lire(requete_texte):
+                print(" | ".join("" if v is None else str(v) for v in ligne))
+            return 0
+
         if verif_seule:
-            return 0 if verifier(requete) else 1
+            return 0 if verifier(lire) else 1
 
         script = CHEMIN_SQL.read_text(encoding="utf-8")
         instructions = decouper(script)
-        print(f"connecté via {cible} — {len(instructions)} instructions à exécuter")
+        print(f"connecté via {cible} — {len(instructions)} instructions à exécuter", flush=True)
         echecs = []
         for index, instruction in enumerate(instructions, start=1):
             debut = instruction.split("\n")[0][:70]
             try:
                 executer(instruction)
-                print(f"  {index:>2}. OK   {debut}")
+                print(f"  {index:>2}. OK   {debut}", flush=True)
             except Exception as erreur:  # noqa: BLE001 - on affiche puis on poursuit
                 echecs.append((debut, masquer(erreur)))
-                print(f"  {index:>2.} ECHEC {debut} -> {masquer(erreur)}")
+                print(f"  {index:>2}. ECHEC {debut} -> {masquer(erreur)}", flush=True)
+            if type_secret == "management" and index < len(instructions):
+                time.sleep(PAUSE_ENTRE_REQUETES)
         if echecs:
             print("--- ECHECS ---")
             for debut, erreur in echecs:
                 print(f" {debut}: {erreur}")
             return 1
-        return 0 if verifier(requete) else 1
+        return 0 if verifier(lire) else 1
     except Exception as erreur:  # noqa: BLE001
         print(f"ERREUR de connexion/exécution: {masquer(erreur)}")
         return 3

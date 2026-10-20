@@ -51,9 +51,22 @@ void main() {
         expect(b.abonnementProche, isFalse);
       });
 
-      test('abonnementFin = maintenant → proche', () {
-        final b = boutiqueTest(abonnementFin: DateTime.now());
+      // « Maintenant » n'est pas testable de façon stable : l'instant lu par
+      // le getter est toujours postérieur à celui du test, la date paraît donc
+      // déjà expirée. On vise une échéance proche mais franchement future.
+      test('abonnementFin dans 2 heures → proche', () {
+        final b = boutiqueTest(
+          abonnementFin: DateTime.now().add(const Duration(hours: 2)),
+        );
         expect(b.abonnementProche, isTrue);
+      });
+
+      test('abonnementFin il y a 1 heure → expiré, donc pas proche', () {
+        final b = boutiqueTest(
+          abonnementFin: DateTime.now().subtract(const Duration(hours: 1)),
+        );
+        expect(b.abonnementExpire, isTrue);
+        expect(b.abonnementProche, isFalse);
       });
 
       test('copyWith préserve tous les champs non spécifiés', () {

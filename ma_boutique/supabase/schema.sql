@@ -211,8 +211,9 @@ create policy "mon_tenant" on boutique_tenants
 
 -- ============================================================
 -- RPC d'initiation : crée la boutique (si absente) et associe le
--- compte Supabase courant à cette boutique. Chaque appareil crée
--- son propre compte Supabase, tous reliés au même tenant.
+-- compte Supabase courant à cette boutique. Le compte est dérivé de
+-- l'id de la boutique : un seul tenant par boutique, partagé par ses
+-- appareils.
 -- ============================================================
 create or replace function initier_boutique(p_id text, p_nom text)
 returns void
@@ -221,13 +222,53 @@ security definer
 set search_path = public
 as $$
 begin
+  -- Seul le compte technique dérivé de CETTE boutique peut s'y rattacher.
+  -- Sans ce garde-fou, n'importe quel compte authentifié pourrait déplacer
+  -- son lien vers une autre boutique et lire ses données (RLS contournée).
+  if lower(coalesce(auth.jwt() ->> 'email', ''))
+     <> 'boutique-' || regexp_replace(lower(p_id), '[^a-z0-9]', '', 'g')
+        || '@ma-boutique.app'
+  then
+    raise exception 'Accès refusé' using errcode = '42501';
+  end if;
   insert into boutiques (id, nom, monnaie)
   values (p_id, p_nom, 'FCFA')
   on conflict (id) do nothing;
   insert into boutique_tenants (user_id, boutique_id)
   values (auth.uid(), p_id)
-  on conflict (user_id) do update set boutique_id = excluded.boutique_id;
+  on conflict (user_id) do nothing;
 end $$;
+
+-- ============================================================
+-- RPC de connexion : un appareil neuf retrouve une boutique existante
+-- à partir de son nom et des identifiants d'un employé actif, sans
+-- embarquer de clé service_role. Ne renvoie que l'identifiant et le nom
+-- de la boutique ; les données passent ensuite par la session du tenant.
+-- ============================================================
+create or replace function rejoindre_boutique(
+  p_nom text,
+  p_role text,
+  p_mot_de_passe text
+)
+returns table (boutique_id text, nom text)
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select b.id, b.nom
+  from boutiques b
+  join employes e on e.boutique_id = b.id
+  where lower(btrim(b.nom)) = lower(btrim(p_nom))
+    and e.role = p_role
+    and e.mot_de_passe = p_mot_de_passe
+    and e.statut = 'actif'
+  order by b.id
+  limit 1
+$$;
+
+revoke all on function rejoindre_boutique(text, text, text) from public;
+grant execute on function rejoindre_boutique(text, text, text) to anon, authenticated;
 
 -- ============================================================
 -- RPC stats_boutique : compteurs employés/produits/ventes.

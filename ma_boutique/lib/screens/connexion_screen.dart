@@ -61,32 +61,29 @@ class _ConnexionScreenState extends State<ConnexionScreen> {
       _mdpCtrl.text,
     );
 
-    // 2) Si échec local + Supabase configuré → résoudre depuis Supabase
+    // 2) Si échec local + Supabase configuré → retrouver la boutique sur le
+    // serveur, y rattacher cet appareil et rapatrier ses données.
     if (message != null && supabaseConfigure) {
       setState(() {
         _chargement = true;
         _erreur = null;
       });
-      try {
-        final imported = await _importerDepuisSupabase(
-          _nomCtrl.text.trim(),
-          _mdpCtrl.text,
-        );
-        if (imported) {
-          message = await provider.connexion(
-            _nomCtrl.text,
-            _role,
-            _mdpCtrl.text,
-          );
-          if (message != null) {
-            message = 'Données synchronisées mais $message';
-          }
-        }
-      } catch (_) {
-        // Erreur silencieuse
-      } finally {
-        if (mounted) setState(() => _chargement = false);
+      final erreur = await provider.rejoindreBoutique(
+        nom: _nomCtrl.text.trim(),
+        role: _role,
+        motDePasse: _mdpCtrl.text,
+      );
+      if (!mounted) return;
+      setState(() => _chargement = false);
+      if (erreur != null) {
+        setState(() => _erreur = erreur);
+        return;
       }
+      message = await provider.connexion(
+        _nomCtrl.text,
+        _role,
+        _mdpCtrl.text,
+      );
     }
 
     if (message != null) {
@@ -98,32 +95,6 @@ class _ConnexionScreenState extends State<ConnexionScreen> {
       MaterialPageRoute(builder: (_) => const HomeScreen()),
       (route) => false,
     );
-  }
-
-  /// Cherche la boutique dans Supabase par son nom, puis copie
-  /// la boutique + les employés dans la base locale.
-  Future<bool> _importerDepuisSupabase(String nomBoutique, String motDePasse) async {
-    final service = SuperadminService.instance;
-    if (service == null) return false;
-
-    final db = context.read<AppProvider>();
-    final boutiques = await service.listerBoutiques();
-    final b = boutiques.cast<Map<String, dynamic>?>().firstWhere(
-      (row) => (row?['nom'] as String? ?? '').toLowerCase() == nomBoutique.toLowerCase(),
-      orElse: () => null,
-    );
-    if (b == null) return false;
-
-    await db.importerBoutiqueDepuisSupabase(b);
-
-    final boutiqueId = b['id'] as String;
-    final employes = await service.client.from('employes').select().eq('boutique_id', boutiqueId);
-
-    for (final emp in employes) {
-      await db.importerEmployeDepuisSupabase(emp);
-    }
-
-    return true;
   }
 
   void _montrerRecuperationCompte() {

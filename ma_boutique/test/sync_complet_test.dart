@@ -10,7 +10,9 @@ void main() {
       };
       final result = versSupabase('boutiques', local, 'b1');
       expect(result['nom'], 'Ma boutique');
-      expect(result['solde_caisse'], 50000);
+      // La caisse est tenue par les triggers serveur (vente/dépense) : le
+      // client ne l'écrit jamais, sinon il pourrait la falsifier.
+      expect(result.containsKey('solde_caisse'), isFalse);
       expect(result['notification_abonnement'], true);
       expect(result.containsKey('boutique_id'), isFalse, reason: 'boutiques table n\'a pas de boutique_id');
     });

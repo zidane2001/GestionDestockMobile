@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -7,7 +8,9 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../core/supabase_config.dart';
 import '../data/database.dart';
+import '../models/models.dart';
 import '../providers/app_provider.dart';
+import 'image_service.dart';
 
 /// Tables synchronisées entre les appareils d'une même boutique.
 const List<String> tablesSynchronisees = [
@@ -332,7 +335,6 @@ class SyncService {
 
   RealtimeChannel? _canal;
   String? _canalBoutiqueId;
-  String? _sessionBoutiqueId;
   bool _tempsReelConnecte = false;
   Timer? _minuteurReconcile;
   Timer? _minuteurCompte;
@@ -354,54 +356,150 @@ class SyncService {
   /// Vrai quand la réconciliation périodique est programmée.
   bool get surveillanceActive => _minuteurReconcile != null;
 
-  Future<SupabaseClient?> _client(String boutiqueId, String nomBoutique) async {
+  String? _employeLie;
+  String? _boutiqueLie;
+
+  /// Chaque appareil possède son propre compte Supabase, créé une fois et
+  /// conservé dans les réglages locaux. Ce compte ne voit rien tant que la
+  /// RPC `rattacher_employe` ne l'a pas relié à une fiche employé.
+  Future<SupabaseClient?> _compteAppareil() async {
     if (!configure) return null;
     final client = Supabase.instance.client;
-    if (_sessionBoutiqueId == boutiqueId &&
-        client.auth.currentSession != null) {
-      return client;
-    }
-    final email =
-        'boutique-${boutiqueId.replaceAll(RegExp(r'[^a-z0-9]'), '')}@ma-boutique.app';
-    final mdpDerive = 'mb-${boutiqueId.replaceAll(RegExp(r'[^a-z0-9]'), '')}';
-    var mdp = await _db.getSetting('serveur_mdp');
-    if (mdp == null || mdp.isEmpty) {
-      mdp = mdpDerive;
-      await _db.setSetting('serveur_mdp', mdp);
-    }
-    Future<bool> essaie(String m) async {
-      try {
-        await client.auth.signInWithPassword(email: email, password: m);
-        return true;
-      } on AuthException {
-        return false;
-      }
-    }
-
-    if (!await essaie(mdp)) {
-      if (mdp != mdpDerive && await essaie(mdpDerive)) {
-        mdp = mdpDerive;
-        await _db.setSetting('serveur_mdp', mdp);
-      } else {
-        try {
-          await client.auth.signUp(email: email, password: mdpDerive);
-          mdp = mdpDerive;
-          await _db.setSetting('serveur_mdp', mdp);
-        } on AuthException {
-          return null;
-        }
-      }
+    if (client.auth.currentSession != null) return client;
+    var email = await _db.getSetting('appareil_email');
+    var mdp = await _db.getSetting('appareil_mdp');
+    if (email == null || email.isEmpty || mdp == null || mdp.isEmpty) {
+      final rnd = Random.secure();
+      String hex(int n) =>
+          List.generate(n, (_) => rnd.nextInt(16).toRadixString(16)).join();
+      email = 'appareil-${hex(24)}@ma-boutique.app';
+      mdp = hex(48);
+      await _db.setSetting('appareil_email', email);
+      await _db.setSetting('appareil_mdp', mdp);
     }
     try {
-      await client.rpc(
-        'initier_boutique',
-        params: {'p_id': boutiqueId, 'p_nom': nomBoutique},
-      );
-    } catch (_) {
-      // Déjà initialisée : rien à faire.
+      await client.auth.signInWithPassword(email: email, password: mdp);
+      return client;
+    } on AuthException {
+      try {
+        final res = await client.auth.signUp(email: email, password: mdp);
+        return res.session == null ? null : client;
+      } on AuthException {
+        return null;
+      }
     }
-    _sessionBoutiqueId = boutiqueId;
-    return client;
+  }
+
+  Future<bool> _lierEmploye(
+    SupabaseClient client,
+    String boutiqueId,
+    String role,
+    String motDePasse,
+  ) async {
+    try {
+      final rows = await client.rpc(
+        'rattacher_employe',
+        params: {
+          'p_boutique': boutiqueId,
+          'p_role': role,
+          'p_mot_de_passe': motDePasse,
+        },
+      );
+      if (rows is List && rows.isNotEmpty) {
+        final row = rows.first as Map;
+        _employeLie = row['employe_id']?.toString();
+        _boutiqueLie = boutiqueId;
+        return true;
+      }
+    } catch (_) {
+      // Mot de passe refusé ou serveur injoignable.
+    }
+    return false;
+  }
+
+  /// Ouvre (ou rouvre) la session de l'employé courant sur cet appareil.
+  Future<SupabaseClient?> _client(AppProvider provider) async {
+    final s = provider.session;
+    final b = provider.boutique;
+    if (s == null || b == null) return null;
+    final client = await _compteAppareil();
+    if (client == null) return null;
+    if (_employeLie == s.id && _boutiqueLie == b.id) return client;
+    final lie = await _lierEmploye(client, b.id, s.role.name, s.motDePasse);
+    return lie ? client : null;
+  }
+
+  /// Vérifie les identifiants d'un employé côté serveur et renvoie
+  /// l'identifiant de sa boutique. La RPC `rejoindre_boutique` est ouverte
+  /// aux clients anonymes : elle ne divulgue rien tant que le mot de passe
+  /// est faux, ce qui rend inutile toute clé privilégiée dans l'application.
+  Future<String?> identifierBoutique({
+    required String nom,
+    required String role,
+    required String motDePasse,
+  }) async {
+    if (!configure) return null;
+    final rows = await Supabase.instance.client.rpc(
+      'rejoindre_boutique',
+      params: {
+        'p_nom': nom,
+        'p_role': role,
+        'p_mot_de_passe': motDePasse,
+      },
+    );
+    if (rows is List && rows.isNotEmpty) {
+      return (rows.first as Map)['boutique_id'] as String?;
+    }
+    return null;
+  }
+
+  /// Relie l'appareil à l'employé (le serveur revérifie le mot de passe),
+  /// puis renvoie la boutique et la fiche employé à importer localement.
+  Future<({Map<String, dynamic>? boutique, Map<String, dynamic>? employe})?>
+      rejoindreBoutique(
+    String boutiqueId,
+    String nom,
+    String role,
+    String motDePasse,
+  ) async {
+    if (!configure) return null;
+    final client = await _compteAppareil();
+    if (client == null) return null;
+    if (!await _lierEmploye(client, boutiqueId, role, motDePasse)) return null;
+    final employeId = _employeLie;
+    if (employeId == null) return null;
+    final boutique =
+        await client.from('boutiques').select().eq('id', boutiqueId).maybeSingle();
+    final employe = await client
+        .from('employes')
+        .select()
+        .eq('id', employeId)
+        .maybeSingle();
+    return (boutique: boutique, employe: employe);
+  }
+
+  /// Première synchronisation d'une boutique créée localement : crée la
+  /// fiche patron côté serveur et lie l'appareil à elle.
+  Future<void> demarrerBoutique(AppProvider provider) async {
+    final s = provider.session;
+    final b = provider.boutique;
+    if (s == null || b == null) return;
+    final client = await _compteAppareil();
+    if (client == null) return;
+    try {
+      await client.rpc('demarrer_boutique', params: {
+        'p_boutique': b.id,
+        'p_nom': b.nom,
+        'p_employe': s.id,
+        'p_nom_employe': s.nom,
+        'p_mot_de_passe': s.motDePasse,
+      });
+      _employeLie = s.id;
+      _boutiqueLie = b.id;
+    } catch (_) {
+      // Boutique déjà initialisée : on retombe sur le rattachement normal.
+      await _lierEmploye(client, b.id, s.role.name, s.motDePasse);
+    }
   }
 
   // ---------- Temps réel ----------
@@ -418,10 +516,17 @@ class SyncService {
       await arreterTempsReel();
     }
     try {
-      final client = await _client(boutiqueId, provider.boutique?.nom ?? '');
+      final client = await _client(provider);
       if (client == null) return false;
       final canal = client.channel('boutique:$boutiqueId');
-      for (final table in tablesSynchronisees) {
+      // Les charges utiles temps réel contiennent toutes les colonnes : un
+      // rôle sans droit sur les prix d'achat reste en réconciliation
+      // périodique, qui passe par les vues masquées.
+      final tables = tablesSynchronisees.where(
+        (t) => provider.session?.role == Role.patron ||
+            (t != 'produits' && t != 'ventes'),
+      );
+      for (final table in tables) {
         canal.onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
@@ -535,7 +640,7 @@ class SyncService {
     if (_compteEnCours || !provider.enLigne) return;
     _compteEnCours = true;
     try {
-      final client = await _client(boutiqueId, provider.boutique?.nom ?? '');
+      final client = await _client(provider);
       if (client == null) return;
       final distante = await client
           .from('boutiques')
@@ -582,6 +687,21 @@ class SyncService {
     await arreterTempsReel();
   }
 
+  /// Déconnexion : l'appareil n'est plus rattaché à l'employé côté
+  /// serveur, l'accès à la boutique est immediately coupé.
+  Future<void> deconnexion() async {
+    _employeLie = null;
+    _boutiqueLie = null;
+    if (!configure) return;
+    try {
+      final client = await _compteAppareil();
+      if (client == null) return;
+      await client.rpc('detacher_employe');
+    } catch (_) {
+      // Serveur injoignable : le lien expirera de lui-même.
+    }
+  }
+
   /// Regroupe les rafraîchissements d'interface (une rafale d'événements
   /// ne provoque qu'un seul rechargement).
   void _programmerRafraichissement(AppProvider provider) {
@@ -612,10 +732,33 @@ class SyncService {
     } else {
       final maj = payload.newRecord['maj_ts']?.toString();
       if (!journal.distantPlusRecent(table, decision.id, maj)) return;
-      await _db.inserer(table, decision.ligne!, boutiqueId: boutiqueId);
+      await _db.inserer(
+        table,
+        await _completerLigne(table, decision.id, decision.ligne!, boutiqueId),
+        boutiqueId: boutiqueId,
+      );
     }
     _programmerRafraichissement(provider);
     provider.signalerMajDistante(table);
+  }
+
+  /// Une charge utile temps réel peut être partielle : les colonnes
+  /// sensibles (prix d'achat) ne sont jamais diffusées. On conserve
+  /// alors la valeur locale pour les colonnes absentes.
+  Future<Map<String, Object?>> _completerLigne(
+    String table,
+    String id,
+    Map<String, Object?> ligne,
+    String boutiqueId,
+  ) async {
+    final locales = table == 'boutiques'
+        ? await _db.toutes('boutiques')
+        : await _db.toutes(table, boutiqueId: boutiqueId);
+    for (final locale in locales) {
+      if (locale['id'] != id) continue;
+      return {...locale, ...ligne};
+    }
+    return ligne;
   }
 
   /// Envoie le catalogue local vers un serveur encore vierge pour cette
@@ -624,6 +767,9 @@ class SyncService {
   Future<int> _amorcerServeur(SupabaseClient client, String boutiqueId) async {
     var envoyees = 0;
     final localesBoutiques = await _db.toutes('boutiques');
+    // Le serveur déduit les ventes et les retours du stock : on lui
+    // envoie le stock de départ, pas celui affiché après les opérations.
+    final ajustements = await _stockAvantOperations(boutiqueId);
     for (final table in tablesSynchronisees) {
       final localesTable = table == 'boutiques'
           ? const <Map<String, Object?>>[]
@@ -638,18 +784,16 @@ class SyncService {
         final id = ligne['id']?.toString();
         if (id == null) continue;
         try {
-          final renvoye = await client
-              .from(table)
-              .upsert(
-                versSupabase(table, ligne, boutiqueId),
-                onConflict: 'id',
-                ignoreDuplicates: false,
-              )
-              .select('id, maj_ts');
-          final maj = renvoye.isNotEmpty
-              ? renvoye.first['maj_ts']?.toString()
-              : null;
-          journal.noter(table, id, maj);
+          final ligneDistante = versSupabase(table, ligne, boutiqueId);
+          if (table == 'produits') {
+            final ajustement = ajustements[id] ?? 0;
+            if (ajustement != 0) {
+              final qte = (ligneDistante['quantite'] as num?)?.toDouble() ?? 0;
+              ligneDistante['quantite'] = qte + ajustement;
+            }
+          }
+          await _pousser(client, table, ligneDistante);
+          journal.noter(table, id, ligneDistante['maj_ts']?.toString());
           envoyees++;
         } catch (_) {
           // Colonne absente ou table non publiée : nouvel essai au cycle suivant.
@@ -657,6 +801,130 @@ class SyncService {
       }
     }
     return envoyees;
+  }
+
+  /// Stock tel qu'il était AVANT les ventes et les retours déjà
+  /// enregistrés localement : le serveur les déduira lui-même.
+  Future<Map<String, double>> _stockAvantOperations(String boutiqueId) async {
+    final ajustements = <String, double>{};
+    final ventes = await _db.toutes('ventes', boutiqueId: boutiqueId);
+    for (final v in ventes) {
+      final id = v['produitId']?.toString();
+      if (id == null || id.isEmpty) continue;
+      final qte = (v['quantite'] as num?)?.toDouble() ?? 0;
+      ajustements[id] = (ajustements[id] ?? 0) + qte;
+    }
+    final retours = await _db.toutes('retours', boutiqueId: boutiqueId);
+    for (final r in retours) {
+      final id = r['produitId']?.toString();
+      if (id == null || id.isEmpty) continue;
+      final motif = r['motif']?.toString() ?? '';
+      // Un défaut retire une pièce (+1 à renvoyer au serveur), un échange
+      // ou un remboursement en rend une (-1).
+      ajustements[id] = (ajustements[id] ?? 0) + (motif == 'defectueux' ? 1 : -1);
+    }
+    return ajustements;
+  }
+
+  /// Vrai si le serveur ne contient encore aucune donnée métier pour la
+  /// boutique. Le contrôle est fait par le serveur : la lecture des
+  /// tables est filtrée par le rôle, elle ne conviendrait pas.
+  Future<bool> _serveurVide(SupabaseClient client, String boutiqueId) async {
+    try {
+      final reponse = await client.rpc(
+        'compte_metier',
+        params: {'p_boutique': boutiqueId},
+      );
+      final nombre = reponse is List && reponse.isNotEmpty
+          ? (reponse.first as Map)['compte_metier']
+          : null;
+      if (nombre is num) return nombre == 0;
+    } catch (_) {
+      // Sans réponse du serveur, on n'amorce pas : mieux vaut un serveur
+      // vide qu'un stock décalé.
+    }
+    return false;
+  }
+
+  /// `produits` et `ventes` sont écrites via des RPC : leurs colonnes de
+  /// coût ne sont pas lisibles directement, donc un upsert PostgREST
+  /// échouerait faute de SELECT sur la table.
+  Future<void> _pousser(
+    SupabaseClient client,
+    String table,
+    Map<String, Object?> ligne,
+  ) async {
+    if (table == 'produits') {
+      // Les images partent d'abord vers Storage : la colonne ne transporte
+      // que des chemins d'objets, lisibles par tous les appareils.
+      ligne['images'] = await _imagesDistantes(client, ligne);
+      await client.rpc('enregistrer_produit', params: {'p_data': ligne});
+    } else if (table == 'ventes') {
+      await client.rpc('enregistrer_vente', params: {'p_data': ligne});
+    } else {
+      await client.from(table).upsert(
+            ligne,
+            onConflict: 'id',
+            ignoreDuplicates: false,
+          );
+    }
+  }
+
+  /// Envoie les images locales du produit vers Storage et renvoie la valeur
+  /// à stocker côté serveur. Un envoi impossible laisse le chemin local :
+  /// il sera réessayé au cycle suivant, sans bloquer le reste du produit.
+  Future<String> _imagesDistantes(
+    SupabaseClient client,
+    Map<String, Object?> ligne,
+  ) async {
+    final brut = (ligne['images'] as String? ?? '').trim();
+    final produitId = ligne['id']?.toString() ?? '';
+    final boutiqueId = ligne['boutique_id']?.toString() ?? '';
+    if (brut.isEmpty || produitId.isEmpty || boutiqueId.isEmpty) return brut;
+    final sortie = <String>[];
+    for (final entree in brut.split(',')) {
+      final chemin = entree.trim();
+      if (chemin.isEmpty) continue;
+      if (!ImageService.estCheminLocal(chemin)) {
+        sortie.add(chemin);
+        continue;
+      }
+      try {
+        sortie.add(await ImageService.instance
+            .televerser(client, chemin, boutiqueId, produitId));
+      } catch (_) {
+        sortie.add(chemin);
+      }
+    }
+    return sortie.join(',');
+  }
+
+  /// Rapatrie les images d'un produit reçu du serveur : l'appareil stocke et
+  /// affiche des fichiers locaux, le serveur des chemins d'objets.
+  Future<String> _imagesLocales(
+    SupabaseClient client,
+    Object? valeur,
+  ) async {
+    final brut = (valeur?.toString() ?? '').trim();
+    if (brut.isEmpty) return '';
+    final sortie = <String>[];
+    for (final entree in brut.split(',')) {
+      final objet = entree.trim();
+      if (objet.isEmpty) continue;
+      if (ImageService.estCheminLocal(objet)) {
+        // Chemin absolu : le nôtre (envoi encore en attente) ou celui d'un
+        // autre appareil, alors sans fichier ici.
+        if (await ImageService.instance.existe(objet)) sortie.add(objet);
+        continue;
+      }
+      try {
+        final local = await ImageService.instance.telecharger(client, objet);
+        if (local != null) sortie.add(local);
+      } catch (_) {
+        // Réessai au prochain cycle de synchronisation.
+      }
+    }
+    return sortie.join(',');
   }
 
   static bool _operationEnAttente(
@@ -688,7 +956,7 @@ class SyncService {
     _enCours = true;
     journal.purger();
     try {
-      final client = await _client(boutiqueId, b.nom);
+      final client = await _client(provider);
       if (client == null) return const SyncResultat();
       final operations = await _db.listeSyncQueue(boutiqueId: boutiqueId);
       var poussees = 0;
@@ -703,16 +971,8 @@ class SyncService {
             final data =
                 jsonDecode(op['data'] as String) as Map<String, Object?>;
             final ligne = versSupabase(table, data, boutiqueId);
-            // La ligne renvoyée porte l'horodatage réellement stocké : elle
-            // permet de reconnaître l'écho de nos propres écritures.
-            final renvoye = await client
-                .from(table)
-                .upsert(ligne, onConflict: 'id', ignoreDuplicates: false)
-                .select('id, maj_ts');
-            final majServeur = renvoye.isNotEmpty
-                ? renvoye.first['maj_ts']?.toString()
-                : ligne['maj_ts']?.toString();
-            journal.noter(table, rowId, majServeur);
+            await _pousser(client, table, ligne);
+            journal.noter(table, rowId, ligne['maj_ts']?.toString());
           }
           await _db.supprimerSyncQueue(
             op['id'] as String,
@@ -727,9 +987,16 @@ class SyncService {
       var lignesMetier = 0;
       final restantes = await _db.listeSyncQueue(boutiqueId: boutiqueId);
       for (final table in tablesSynchronisees) {
+        // `produits` et `ventes` ont des colonnes sensibles : les lectures
+        // passent par des vues qui masquent les coûts selon les droits.
+        final source = switch (table) {
+          'produits' => 'produits_employe',
+          'ventes' => 'ventes_employe',
+          _ => table,
+        };
         final rows = table == 'boutiques'
-            ? await client.from(table).select().eq('id', boutiqueId)
-            : await client.from(table).select().eq('boutique_id', boutiqueId);
+            ? await client.from(source).select().eq('id', boutiqueId)
+            : await client.from(source).select().eq('boutique_id', boutiqueId);
         if (table != 'boutiques') lignesMetier += rows.length;
         for (final row in rows) {
           final id = row['id']?.toString();
@@ -739,6 +1006,10 @@ class SyncService {
           if (!journal.distantPlusRecent(table, id, maj)) continue;
           final locale = versLocal(table, row);
           if (locale.isEmpty) continue;
+          if (table == 'produits') {
+            locale['images'] =
+                await _imagesLocales(client, row['images']);
+          }
           await _db.inserer(table, locale, boutiqueId: boutiqueId);
           recues++;
         }
@@ -748,7 +1019,8 @@ class SyncService {
       // récentes, on y pousse donc le catalogue local une fois pour que tous
       // les appareils repartent du même état.
       var amorcees = 0;
-      if (serveurSansDonneesMetier(lignesMetier)) {
+      if (serveurSansDonneesMetier(lignesMetier) &&
+          await _serveurVide(client, boutiqueId)) {
         amorcees = await _amorcerServeur(client, boutiqueId);
       }
       await provider.chargerDepuisBase();
@@ -782,6 +1054,8 @@ Map<String, Object?> versSupabase(
     if (cle == 'boutique_id') return;
     final cible = colonnes[cle];
     if (cible == null) return;
+    // La caisse est tenue par les triggers serveur : le client ne l'écrit plus.
+    if (table == 'boutiques' && cible == 'solde_caisse') return;
     out[cible] = booleens.contains(cle) && valeur is num ? valeur == 1 : valeur;
   });
   return out;

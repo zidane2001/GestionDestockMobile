@@ -846,9 +846,12 @@ class SyncService {
     return false;
   }
 
-  /// `produits` et `ventes` sont écrites via des RPC : leurs colonnes de
-  /// coût ne sont pas lisibles directement, donc un upsert PostgREST
-  /// échouerait faute de SELECT sur la table.
+  /// Le serveur distingue la création de la modification : `upsert` envoie
+  /// `ON CONFLICT DO UPDATE`, qui exige les droits de modification. Un
+  /// caissier peut créer une vente ou une sortie de caisse sans pouvoir
+  /// réécrire une ligne existante : son envoi échouait donc entièrement.
+  /// On insère d'abord, et on ne bascule sur une mise à jour que si la ligne
+  /// existe déjà (c'est alors une modification locale à répercuter).
   Future<void> _pousser(
     SupabaseClient client,
     String table,
@@ -861,12 +864,21 @@ class SyncService {
       await client.rpc('enregistrer_produit', params: {'p_data': ligne});
     } else if (table == 'ventes') {
       await client.rpc('enregistrer_vente', params: {'p_data': ligne});
+    } else if (table == 'activites') {
+      // Journal en ajout seul : un doublon signifie que la ligne est déjà
+      // arrivée et peut être considérée comme envoyée.
+      try {
+        await client.from(table).insert(ligne);
+      } on PostgrestException catch (e) {
+        if (e.code != '23505') rethrow;
+      }
     } else {
-      await client.from(table).upsert(
-            ligne,
-            onConflict: 'id',
-            ignoreDuplicates: false,
-          );
+      try {
+        await client.from(table).insert(ligne);
+      } on PostgrestException catch (e) {
+        if (e.code != '23505') rethrow;
+        await client.from(table).update(ligne).eq('id', ligne['id']!);
+      }
     }
   }
 
@@ -1010,7 +1022,14 @@ class SyncService {
             locale['images'] =
                 await _imagesLocales(client, row['images']);
           }
-          await _db.inserer(table, locale, boutiqueId: boutiqueId);
+          // `boutiques` n'a pas de colonne de tenant : son `id` est celui de
+          // la boutique. Ajouter `boutique_id` y ferait échouer l'insertion
+          // SQLite et interromprait toute la réconciliation.
+          await _db.inserer(
+            table,
+            locale,
+            boutiqueId: table == 'boutiques' ? null : boutiqueId,
+          );
           recues++;
         }
       }

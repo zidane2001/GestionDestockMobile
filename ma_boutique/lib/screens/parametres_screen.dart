@@ -518,7 +518,9 @@ onChanged: (v) {
                   _LigneParametre(
                     icone: Icons.password_rounded,
                     titre: 'Mot de passe',
-                    sousTitre: 'Changer le mot de passe du patron',
+                    sousTitre: session?.role == Role.patron
+                        ? 'Changer le mot de passe du patron'
+                        : 'Changer mon mot de passe',
                     avecBordure: false,
                     enfant: Bouton(
                       taille: TailleBouton.sm,
